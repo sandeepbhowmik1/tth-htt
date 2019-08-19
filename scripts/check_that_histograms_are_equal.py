@@ -1,5 +1,21 @@
+#!/usr/bin/env python
+
+import ROOT
 import sys
-from tthAnalysis.HiggsToTauTau.commands import *
+
+def get_events_count(root_file):
+    f = ROOT.TFile(root_file)
+    count = f.Get("analyzedEntries")
+    has_entries_count = hasattr(count, 'GetEntries')
+
+    if has_entries_count:
+        entries_count = count.GetEntries()
+        print("Input file '%s' contains %i analyzed events." % (root_file, entries_count))
+        return entries_count
+    else:
+        entries_count = 0.0
+        print("ERROR: Failed to read number of analyzed events in input file '%s' !! Will set number of analyzed events to zero." % root_file)
+        return entries_count
 
 def main():
     output_histogram = sys.argv[1]
@@ -15,10 +31,12 @@ def main():
     input_histograms_events_total_count = sum(input_histograms_events_counts)
 
     if abs(output_histogram_events_total_count - input_histograms_events_total_count) < 2.0:
-        print('Output histogram event count is same as input histograms event counts sum (%s and %s)' % (output_histogram_events_total_count, input_histograms_events_total_count))
+        print("Event counts (%i) match between output file and sum of input files." % output_histogram_events_total_count)
         sys.exit(0)
     else:
-        print('ERROR: count(output_histogram.events) != count(input_histograms.events) (%s and %s)' % (output_histogram_events_total_count, input_histograms_events_total_count))
+        print("ERROR: Event counts between output file (%i) and sum of input files (%i) does not match !!" % (output_histogram_events_total_count, input_histograms_events_total_count))
+        print("output file = '%s'" % output_histogram)
+        print("input files = '%s'" % " ".join(input_histograms))
         sys.exit(1)
 
 main()

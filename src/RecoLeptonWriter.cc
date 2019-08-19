@@ -1,59 +1,90 @@
 #include "tthAnalysis/HiggsToTauTau/interface/RecoLeptonWriter.h" // RecoLeptonWriter
 
-#include "FWCore/Utilities/interface/Exception.h"
+#include "tthAnalysis/HiggsToTauTau/interface/BranchAddressInitializer.h" // BranchAddressInitializer, TTree, Form()
+#include "tthAnalysis/HiggsToTauTau/interface/analysisAuxFunctions.h" // Btag
 
-#include "tthAnalysis/HiggsToTauTau/interface/writerAuxFunctions.h" // setBranchI, setBranchVI, setBranchVF
+RecoLeptonWriter::RecoLeptonWriter(bool isMC,
+                                   const std::string & branchName_obj)
+  : RecoLeptonWriter(isMC, Form("n%s", branchName_obj.data()), branchName_obj)
+{}
 
-#include <TString.h> // Form
-
-RecoLeptonWriter::RecoLeptonWriter(const std::string& branchName_num, const std::string& branchName_obj)
-  : max_nLeptons_(32)
+RecoLeptonWriter::RecoLeptonWriter(bool isMC,
+                                   const std::string & branchName_num,
+                                   const std::string & branchName_obj)
+  : max_nLeptons_(64)
   , branchName_num_(branchName_num)
   , branchName_obj_(branchName_obj)
-  , pt_(0)
-  , eta_(0)
-  , phi_(0)
-  , mass_(0)
-  , pdgId_(0)
-  , dxy_(0)
-  , dz_(0)
-  , relIso_(0)
-  , chargedHadRelIso03_(0)
-  , miniIsoCharged_(0)
-  , miniIsoNeutral_(0)
-  , sip3d_(0)
-  , mvaRawTTH_(0)
-  , jetNDauChargedMVASel_(0)
-  , jetPtRel_(0)
-  , jetPtRatio_(0)
-  , jetBtagCSV_(0)
-  , tightCharge_(0)
-  , charge_(0)
+  , isMC_(isMC)
+  , genLeptonWriter_(nullptr)
+  , genHadTauWriter_(nullptr)
+  , genPhotonWriter_(nullptr)
+  , genJetWriter_(nullptr)
+  , pt_(nullptr)
+  , eta_(nullptr)
+  , phi_(nullptr)
+  , mass_(nullptr)
+  , pdgId_(nullptr)
+  , dxy_(nullptr)
+  , dz_(nullptr)
+  , relIso_all_(nullptr)
+  , pfRelIso04_all_(nullptr)
+  , relIso_chg_(nullptr)
+  , relIso_neu_(nullptr)
+  , sip3d_(nullptr)
+  , mvaRawTTH_(nullptr)
+  , jetPtRatio_(nullptr)
+  , jetPtRel_(nullptr)
+  , jetNDauChargedMVASel_(nullptr)
+  , tightCharge_(nullptr)
+  , charge_(nullptr)
+  , filterBits_(nullptr)
+  , jetIdx_(nullptr)
+  , genPartFlav_(nullptr)
+  , genMatchIdx_(nullptr)
 {
+  if(isMC_)
+  {
+    genLeptonWriter_ = new GenParticleWriter(Form("%s_genLepton", branchName_obj_.data()), max_nLeptons_);
+    genHadTauWriter_ = new GenParticleWriter(Form("%s_genTau",    branchName_obj_.data()), max_nLeptons_);
+    genPhotonWriter_ = new GenParticleWriter(Form("%s_genPhoton", branchName_obj_.data()), max_nLeptons_);
+    genJetWriter_    = new GenParticleWriter(Form("%s_genJet",    branchName_obj_.data()), max_nLeptons_);
+  }
   setBranchNames();
 }
 
 RecoLeptonWriter::~RecoLeptonWriter()
 {
-  delete pt_;
-  delete eta_;
-  delete phi_;
-  delete mass_;
-  delete pdgId_;
-  delete dxy_;
-  delete dz_;
-  delete relIso_;
-  delete chargedHadRelIso03_;
-  delete miniIsoCharged_;
-  delete miniIsoNeutral_;
-  delete sip3d_;
-  delete mvaRawTTH_;
-  delete jetNDauChargedMVASel_;
-  delete jetPtRel_;
-  delete jetPtRatio_;
-  delete jetBtagCSV_;
-  delete tightCharge_;
-  delete charge_;
+  delete genLeptonWriter_;
+  delete genHadTauWriter_;
+  delete genPhotonWriter_;
+  delete genJetWriter_;
+  delete[] pt_;
+  delete[] eta_;
+  delete[] phi_;
+  delete[] mass_;
+  delete[] pdgId_;
+  delete[] dxy_;
+  delete[] dz_;
+  delete[] relIso_all_;
+  delete[] pfRelIso04_all_;
+  delete[] relIso_chg_;
+  delete[] relIso_neu_;
+  delete[] sip3d_;
+  delete[] mvaRawTTH_;
+  delete[] jetPtRatio_;
+  delete[] jetPtRel_;
+  delete[] jetNDauChargedMVASel_;
+  delete[] tightCharge_;
+  delete[] charge_;
+  delete[] filterBits_;
+  delete[] jetIdx_;
+  delete[] genPartFlav_;
+  delete[] genMatchIdx_;
+
+  for(auto & kv: jetBtagCSVs_)
+  {
+    delete[] kv.second;
+  }
 }
 
 void RecoLeptonWriter::setBranchNames()
@@ -65,59 +96,72 @@ void RecoLeptonWriter::setBranchNames()
   branchName_pdgId_ = Form("%s_%s", branchName_obj_.data(), "pdgId");
   branchName_dxy_ = Form("%s_%s", branchName_obj_.data(), "dxy");
   branchName_dz_ = Form("%s_%s", branchName_obj_.data(), "dz");
-  branchName_relIso_ = Form("%s_%s", branchName_obj_.data(), "miniRelIso");
-  branchName_chargedHadRelIso03_ = Form("%s_%s", branchName_obj_.data(), "chargedHadRelIso03");
-  branchName_miniIsoCharged_ = Form("%s_%s", branchName_obj_.data(), "miniIsoCharged");
-  branchName_miniIsoNeutral_ = Form("%s_%s", branchName_obj_.data(), "miniIsoNeutral");
+  branchName_relIso_all_ = Form("%s_%s", branchName_obj_.data(), "miniPFRelIso_all");
+  branchName_pfRelIso04_all_ = Form("%s_%s", branchName_obj_.data(), "pfRelIso04_all");
+  branchName_relIso_chg_ = Form("%s_%s", branchName_obj_.data(), "miniPFRelIso_chg");
+  branchName_relIso_neu_ = Form("%s_%s", branchName_obj_.data(), "miniPFRelIso_neu");
   branchName_sip3d_ = Form("%s_%s", branchName_obj_.data(), "sip3d");
   branchName_mvaRawTTH_ = Form("%s_%s", branchName_obj_.data(), "mvaTTH");
-  branchName_jetNDauChargedMVASel_ = Form("%s_%s", branchName_obj_.data(), "mvaTTHjetNDauChargedMVASel");
-  branchName_jetPtRel_ = Form("%s_%s", branchName_obj_.data(), "mvaTTHjetPtRel");
   branchName_jetPtRatio_ = Form("%s_%s", branchName_obj_.data(), "jetPtRatio");
-  branchName_jetBtagCSV_ = Form("%s_%s", branchName_obj_.data(), "jetBTagCSV");
+  branchName_jetPtRel_ = Form("%s_%s", branchName_obj_.data(), "jetPtRelv2");
+  for(Btag btag: { Btag::kCSVv2, Btag::kDeepCSV, Btag::kDeepJet })
+  {
+    std::string btag_str = "";
+    switch(btag)
+    {
+      case Btag::kCSVv2:   btag_str = "CSV"; break;
+      case Btag::kDeepCSV: btag_str = "DeepCSV"; break;
+      case Btag::kDeepJet: btag_str = "DeepJet"; break;
+    }
+    branchNames_jetBtagCSV_[btag] = Form("%s_jetBTag%s", branchName_obj_.data(), btag_str.data());
+  }
+  branchName_jetNDauChargedMVASel_ = Form("%s_%s", branchName_obj_.data(), "jetNDauChargedMVASel");
   branchName_tightCharge_ = Form("%s_%s", branchName_obj_.data(), "tightCharge");
   branchName_charge_ = Form("%s_%s", branchName_obj_.data(), "charge");
+  branchName_filterBits_ = Form("%s_%s", branchName_obj_.data(), "filterBits");
+  branchName_jetIdx_ = Form("%s_%s", branchName_obj_.data(), "jetIdx");
+  branchName_genPartFlav_ = Form("%s_%s", branchName_obj_.data(), "genPartFlav");
+  branchName_genMatchIdx_ = Form("%s_%s", branchName_obj_.data(), "genMatchIdx");
 }
 
-void RecoLeptonWriter::setBranches(TTree *tree)
+void RecoLeptonWriter::setBranches(TTree * tree)
 {
-  setBranchI(tree, branchName_num_, &nLeptons_);
-  pt_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_pt_, branchName_num_, pt_);
-  eta_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_eta_, branchName_num_, eta_);
-  phi_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_phi_, branchName_num_, phi_);
-  mass_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_mass_, branchName_num_, mass_);
-  pdgId_ = new Int_t[max_nLeptons_];
-  setBranchVI(tree, branchName_pdgId_, branchName_num_, pdgId_);
-  dxy_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_dxy_, branchName_num_, dxy_);
-  dz_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_dz_, branchName_num_, dz_);
-  relIso_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_relIso_, branchName_num_, relIso_);
-  chargedHadRelIso03_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_chargedHadRelIso03_, branchName_num_, chargedHadRelIso03_);
-  miniIsoCharged_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_miniIsoCharged_, branchName_num_, miniIsoCharged_);
-  miniIsoNeutral_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_miniIsoNeutral_, branchName_num_, miniIsoNeutral_);
-  sip3d_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_sip3d_, branchName_num_, sip3d_);
-  mvaRawTTH_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_mvaRawTTH_, branchName_num_, mvaRawTTH_);
-  jetNDauChargedMVASel_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_jetNDauChargedMVASel_, branchName_num_, jetNDauChargedMVASel_);
-  jetPtRel_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_jetPtRel_, branchName_num_, jetPtRel_);
-  jetPtRatio_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_jetPtRatio_, branchName_num_, jetPtRatio_);
-  jetBtagCSV_ = new Float_t[max_nLeptons_];
-  setBranchVF(tree, branchName_jetBtagCSV_, branchName_num_, jetBtagCSV_);
-  tightCharge_ = new Int_t[max_nLeptons_];
-  setBranchVI(tree, branchName_tightCharge_, branchName_num_, tightCharge_);
-  charge_ = new Int_t[max_nLeptons_];
-  setBranchVI(tree, branchName_charge_, branchName_num_, charge_);
+  if(isMC_)
+  {
+    genLeptonWriter_->setBranches(tree);
+    genHadTauWriter_->setBranches(tree);
+    genPhotonWriter_->setBranches(tree);
+    genJetWriter_->setBranches(tree);
+  }
+  BranchAddressInitializer bai(tree, max_nLeptons_, branchName_num_);
+  bai.setBranch(nLeptons_, branchName_num_);
+  bai.setBranch(pt_, branchName_pt_);
+  bai.setBranch(eta_, branchName_eta_);
+  bai.setBranch(phi_, branchName_phi_);
+  bai.setBranch(mass_, branchName_mass_);
+  bai.setBranch(pdgId_, branchName_pdgId_);
+  bai.setBranch(dxy_, branchName_dxy_);
+  bai.setBranch(dz_, branchName_dz_);
+  bai.setBranch(relIso_all_, branchName_relIso_all_);
+  bai.setBranch(pfRelIso04_all_, branchName_pfRelIso04_all_);
+  bai.setBranch(relIso_chg_, branchName_relIso_chg_);
+  bai.setBranch(relIso_neu_, branchName_relIso_neu_);
+  bai.setBranch(sip3d_, branchName_sip3d_);
+  bai.setBranch(mvaRawTTH_, branchName_mvaRawTTH_);
+  bai.setBranch(jetPtRatio_, branchName_jetPtRatio_);
+  bai.setBranch(jetPtRel_, branchName_jetPtRel_);
+  for(const auto & kv: branchNames_jetBtagCSV_)
+  {
+    bai.setBranch(jetBtagCSVs_[kv.first], kv.second);
+  }
+  bai.setBranch(jetNDauChargedMVASel_, branchName_jetNDauChargedMVASel_);
+  bai.setBranch(tightCharge_, branchName_tightCharge_);
+  bai.setBranch(charge_, branchName_charge_);
+  bai.setBranch(filterBits_, branchName_filterBits_);
+  bai.setBranch(jetIdx_, branchName_jetIdx_);
+  if(isMC_)
+  {
+    bai.setBranch(genPartFlav_, branchName_genPartFlav_);
+    bai.setBranch(genMatchIdx_, branchName_genMatchIdx_);
+  }
 }

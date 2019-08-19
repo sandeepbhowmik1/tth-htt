@@ -1,148 +1,189 @@
 #!/usr/bin/env python
-import os, logging, sys, getpass
-from tthAnalysis.HiggsToTauTau.analyzeConfig_3l_1tau import analyzeConfig_3l_1tau
+
+from tthAnalysis.HiggsToTauTau.configs.analyzeConfig_3l_1tau import analyzeConfig_3l_1tau
 from tthAnalysis.HiggsToTauTau.jobTools import query_yes_no
+from tthAnalysis.HiggsToTauTau.analysisSettings import systematics, get_lumi
+from tthAnalysis.HiggsToTauTau.runConfig import tthAnalyzeParser, filter_samples
+from tthAnalysis.HiggsToTauTau.common import logging, load_samples
 
-#--------------------------------------------------------------------------------
-# NOTE: set mode flag to
-#   'VHbb' : to run the analysis directly on the VHbb Ntuples (to e.g. produce the RLE files to run the tthProdNtuple and ttHAddMEM steps)
-#   'addMEM' : to run the analysis on the Ntuples with MEM variables added
-#   'forBDTtraining' : to run the analysis on the Ntuples with MEM variables added, and with a relaxed event selection, to increase the BDT training statistics
-#--------------------------------------------------------------------------------
+import os
+import sys
+import getpass
 
-mode = "VHbb"
+# E.g.: ./test/tthAnalyzeRun_3l_1tau.py -v 2017Dec13 -m default -e 2017
 
-hadTau_selection = None
-changeBranchNames = None
-applyFakeRateWeights = None
-if mode == "VHbb":
-  from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_3l_1tau_2015 import samples_2015
-  from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_3l_1tau_2016 import samples_2016
-  hadTau_selection = "dR03mvaMedium"
-  changeBranchNames = False
-  applyFakeRateWeights = "3lepton"
+mode_choices         = [
+  'default', 'addMEM', 'forBDTtraining_beforeAddMEM', 'forBDTtraining_afterAddMEM', 'sync', 'sync_wMEM'
+]
+sys_choices      = [ 'full' ] + systematics.an_extended_opts
+systematics.full = systematics.an_extended
+
+parser = tthAnalyzeParser()
+parser.add_modes(mode_choices)
+parser.add_sys(sys_choices)
+parser.add_preselect()
+parser.add_rle_select()
+parser.add_nonnominal()
+parser.add_tau_id_wp()
+parser.add_hlt_filter()
+parser.add_files_per_job()
+parser.add_use_home()
+parser.add_jet_cleaning()
+parser.add_gen_matching()
+args = parser.parse_args()
+
+# Common arguments
+era                = args.era
+version            = args.version
+dry_run            = args.dry_run
+no_exec            = args.no_exec
+auto_exec          = args.auto_exec
+check_output_files = not args.not_check_input_files
+debug              = args.debug
+sample_filter      = args.filter
+num_parallel_jobs  = args.num_parallel_jobs
+running_method     = args.running_method
+
+# Additional arguments
+mode              = args.mode
+systematics_label = args.systematics
+use_preselected   = args.use_preselected
+rle_select        = os.path.expanduser(args.rle_select)
+use_nonnominal    = args.original_central
+hlt_filter        = args.hlt_filter
+files_per_job     = args.files_per_job
+use_home          = args.use_home
+jet_cleaning      = args.jet_cleaning
+gen_matching      = args.gen_matching
+
+# Use the arguments
+central_or_shifts = []
+for systematic_label in systematics_label:
+  for central_or_shift in getattr(systematics, systematic_label):
+    if central_or_shift not in central_or_shifts:
+      central_or_shifts.append(central_or_shift)
+do_sync = mode.startswith('sync')
+lumi = get_lumi(era)
+jet_cleaning_by_index = (jet_cleaning == 'by_index')
+gen_matching_by_index = (gen_matching == 'by_index')
+
+MEMbranch           = ''
+chargeSumSelections = [ "OS" ] if "forBDTtraining" in mode else [ "OS", "SS" ]
+hadTau_selection    = "dR03mvaLoose"
+
+if mode == "default":
+  samples = load_samples(era, suffix = "preselected" if use_preselected else "")
+
 elif mode == "addMEM":
-  from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_2016_3l1tau_addMEM import samples_2016
-  hadTau_selection = "dR03mvaMedium"
-  changeBranchNames = True
-  applyFakeRateWeights = "3lepton"
-elif mode == "forBDTtraining":
-  from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_2016_3l1tau_addMEM_forBDTtraining import samples_2016
-  hadTau_selection = "dR03mvaVVLoose"
-  changeBranchNames = True
-  applyFakeRateWeights = "4L"
+  samples = load_samples(era, suffix = "addMEM_preselected_3l1tau" if use_preselected else "addMEM_3l1tau")
+  MEMbranch        = 'memObjects_3l_1tau_lepFakeable_tauTight_{}'.format(hadTau_selection)
+
+elif mode == "forBDTtraining_beforeAddMEM":
+  if use_preselected:
+    raise ValueError("Makes no sense to use preselected samples w/ BDT training mode")
+
+  samples = load_samples(era, suffix = "BDT")
+  hadTau_selection         = "dR03mvaTight"
+  hadTau_selection_relaxed = "dR03mvaVVLoose"
+
+elif mode == "forBDTtraining_afterAddMEM":
+  if use_preselected:
+    raise ValueError("Makes no sense to use preselected samples w/ BDT training mode")
+
+  samples = load_samples(era, suffix = "BDT_addMEM_3l1tau")
+  hadTau_selection         = "dR03mvaTight"
+  hadTau_selection_relaxed = "dR03mvaVVLoose"
+  MEMbranch                = 'memObjects_3l_1tau_lepLoose_tauTight_{}'.format(hadTau_selection_relaxed)
+
+elif mode.startswith("sync"):
+  if mode == "sync_wMEM":
+    samples = load_samples(era, suffix = "addMEM_preselected_sync" if use_preselected else "addMEM_sync")
+  elif mode == "sync":
+    if use_preselected:
+      raise ValueError("Makes no sense to use preselected samples in sync")
+    samples = load_samples(era, suffix = "sync" if use_nonnominal else "sync_nom")
+  else:
+    raise ValueError("Invalid mode: %s" % mode)
 else:
-  raise ValueError("Invalid Configuration parameter 'mode' = %s !!" % mode)
-
-#ERA = "2015"
-ERA = "2016"
-
-samples = None
-LUMI = None
-if ERA == "2015":
-  samples = samples_2015
-  LUMI =  2.3e+3 # 1/pb
-elif ERA == "2016":
-  samples = samples_2016
-  LUMI = 35.9e+3 # 1/pb
-else:
-  raise ValueError("Invalid Configuration parameter 'ERA' = %s !!" % ERA)
-
-version = "2017May12"
+  raise ValueError("Invalid mode: %s" % mode)
 
 if __name__ == '__main__':
-  logging.basicConfig(
-    stream = sys.stdout,
-    level = logging.INFO,
-    format = '%(asctime)s - %(levelname)s: %(message)s')
+  logging.info(
+    "Running the jobs with the following systematic uncertainties enabled: %s" % \
+    ', '.join(central_or_shifts)
+  )
+  if not use_preselected:
+    logging.warning('Running the analysis on fully inclusive samples!')
+
+  if sample_filter:
+    samples = filter_samples(samples, sample_filter)
+
+  if args.tau_id_wp:
+    logging.info("Changing tau ID working point: %s -> %s" % (hadTau_selection, args.tau_id_wp))
+    hadTau_selection = args.tau_id_wp
 
   analysis = analyzeConfig_3l_1tau(
-    configDir = os.path.join("/home", getpass.getuser(), "ttHAnalysis", ERA, version),
-    outputDir = os.path.join("/hdfs/local", getpass.getuser(), "ttHAnalysis", ERA, version),
-    executable_analyze = "analyze_3l_1tau", cfgFile_analyze = "analyze_3l_1tau_cfg.py",
-    samples = samples, changeBranchNames = changeBranchNames,
-    hadTau_selection = hadTau_selection,
+    configDir = os.path.join("/home",       getpass.getuser(), "ttHAnalysis", era, version),
+    outputDir = os.path.join("/hdfs/local", getpass.getuser(), "ttHAnalysis", era, version),
+    executable_analyze                    = "analyze_3l_1tau",
+    cfgFile_analyze                       = "analyze_3l_1tau_cfg.py",
+    samples                               = samples,
+    MEMbranch                             = MEMbranch,
+    hadTau_selection                      = hadTau_selection,
     # CV: apply "fake" background estimation to leptons only and not to hadronic taus, as discussed on slide 10 of
     #     https://indico.cern.ch/event/597028/contributions/2413742/attachments/1391684/2120220/16.12.22_ttH_Htautau_-_Review_of_systematics.pdf
-    #applyFakeRateWeights = "4L",
-    applyFakeRateWeights = applyFakeRateWeights,
-    chargeSumSelections  = [ "OS", "SS" ],
-    central_or_shifts = [ 
-      "central",
-##       "CMS_ttHl_btag_HFUp", 
-##       "CMS_ttHl_btag_HFDown",	
-##       "CMS_ttHl_btag_HFStats1Up", 
-##       "CMS_ttHl_btag_HFStats1Down",
-##       "CMS_ttHl_btag_HFStats2Up", 
-##       "CMS_ttHl_btag_HFStats2Down",
-##       "CMS_ttHl_btag_LFUp", 
-##       "CMS_ttHl_btag_LFDown",	
-##       "CMS_ttHl_btag_LFStats1Up", 
-##       "CMS_ttHl_btag_LFStats1Down",
-##       "CMS_ttHl_btag_LFStats2Up", 
-##       "CMS_ttHl_btag_LFStats2Down",
-##       "CMS_ttHl_btag_cErr1Up",
-##       "CMS_ttHl_btag_cErr1Down",
-##       "CMS_ttHl_btag_cErr2Up",
-##       "CMS_ttHl_btag_cErr2Down",
-##       "CMS_ttHl_JESUp",
-##       "CMS_ttHl_JESDown",
-      #------------------------------------------------------
-      # CV: enable the CMS_ttHl_FRe_shape and CMS_ttHl_FRm_shape only
-      #     if you plan to run compShapeSyst 1!
-##       "CMS_ttHl_FRe_shape_ptUp",
-##       "CMS_ttHl_FRe_shape_ptDown",
-##       "CMS_ttHl_FRe_shape_etaUp",
-##       "CMS_ttHl_FRe_shape_etaDown",
-##       "CMS_ttHl_FRe_shape_eta_barrelUp",
-##       "CMS_ttHl_FRe_shape_eta_barrelDown",
-##       "CMS_ttHl_FRm_shape_ptUp",
-##       "CMS_ttHl_FRm_shape_ptDown",
-##       "CMS_ttHl_FRm_shape_etaUp",
-##       "CMS_ttHl_FRm_shape_etaDown",
-      #------------------------------------------------------
-##       "CMS_ttHl_tauESUp",
-##       "CMS_ttHl_tauESDown",
-##       "CMS_ttHl_FRjt_normUp",
-##       "CMS_ttHl_FRjt_normDown",
-##       "CMS_ttHl_FRjt_shapeUp",
-##       "CMS_ttHl_FRjt_shapeDown",
-##       "CMS_ttHl_FRet_shiftUp",
-##       "CMS_ttHl_FRet_shiftDown",
-##       "CMS_ttHl_FRmt_shiftUp",
-##       "CMS_ttHl_FRmt_shiftDown",
-##       "CMS_ttHl_thu_shape_ttH_x1Up",  
-##       "CMS_ttHl_thu_shape_ttH_x1Down",
-##       "CMS_ttHl_thu_shape_ttH_y1Up",   
-##       "CMS_ttHl_thu_shape_ttH_y1Down",
-##       "CMS_ttHl_thu_shape_ttW_x1Up",
-##       "CMS_ttHl_thu_shape_ttW_x1Down",
-##       "CMS_ttHl_thu_shape_ttW_y1Up",
-##       "CMS_ttHl_thu_shape_ttW_y1Down",
-##       "CMS_ttHl_thu_shape_ttZ_x1Up",
-##       "CMS_ttHl_thu_shape_ttZ_x1Down",
-##       "CMS_ttHl_thu_shape_ttZ_y1Up",
-##       "CMS_ttHl_thu_shape_ttZ_y1Down" 
-    ],
-    max_files_per_job = 100,
-    era = ERA, use_lumi = True, lumi = LUMI,
-    debug = False,
-    running_method = "sbatch",
-    num_parallel_jobs = 8,
-    executable_addBackgrounds = "addBackgrounds",
-    executable_addBackgroundJetToTauFakes = "addBackgroundLeptonFakes", # CV: use common executable for estimating jet->lepton and jet->tau_h fake background
-    histograms_to_fit = [ "EventCounter", "numJets", "mvaDiscr_3l", "mTauTauVis", "mvaDiscr_3l_1tau" ],
-    select_rle_output = True,
-    select_root_output = False)
-  
-  if mode == "forBDTtraining":
-    analysis.set_BDT_training()
-  analysis.create()
+    applyFakeRateWeights                  = "3lepton",
+    chargeSumSelections                   = chargeSumSelections,
+    jet_cleaning_by_index                 = jet_cleaning_by_index,
+    gen_matching_by_index                 = gen_matching_by_index,
+    central_or_shifts                     = central_or_shifts,
+    max_files_per_job                     = files_per_job,
+    era                                   = era,
+    use_lumi                              = True,
+    lumi                                  = lumi,
+    check_output_files                    = check_output_files,
+    running_method                        = running_method,
+    num_parallel_jobs                     = num_parallel_jobs,
+    executable_addBackgrounds             = "addBackgrounds",
+    # CV: use common executable for estimating jet->lepton and jet->tau_h fake background
+    executable_addBackgroundJetToTauFakes = "addBackgroundLeptonFakes",
+    histograms_to_fit                     = {
+      "EventCounter"                     : {},
+      "numJets"                          : {},
+      "mvaDiscr_3l"                      : {},
+      "mTauTauVis"                       : {},
+      "mvaOutput_plainKin_tt"            : { 'quantile_rebin' : 6, 'quantile_in_fakes' : False }, # BDT2; quantile in all bkg
+      "mvaOutput_plainKin_ttV"           : { 'quantile_rebin' : 6, 'quantile_in_fakes' : False }, # BDT1; quantile in all bkg
+      "mvaOutput_plainKin_SUM_M"         : { 'explicit_binning' : [ 0.0, 0.28, 0.35, 0.40, 0.47, 0.53, 1.0 ] }, # BDT3; quantile in all bkg
+      "mvaOutput_plainKin_SUM_M_noRebin" : {},
+      "mvaOutput_plainKin_1B_M"          : {},
+      "mvaOutput_final"                  : {},
+    },
+    select_rle_output                     = True,
+    select_root_output                    = False,
+    dry_run                               = dry_run,
+    do_sync                               = do_sync,
+    isDebug                               = debug,
+    rle_select                            = rle_select,
+    use_nonnominal                        = use_nonnominal,
+    hlt_filter                            = hlt_filter,
+    use_home                              = use_home,
+  )
 
-  ##run_analysis = query_yes_no("Start jobs ?")
-  run_analysis = True
+  if mode.find("forBDTtraining") != -1:
+    analysis.set_BDT_training(hadTau_selection_relaxed)
+
+  job_statistics = analysis.create()
+  for job_type, num_jobs in job_statistics.items():
+    logging.info(" #jobs of type '%s' = %i" % (job_type, num_jobs))
+
+  if auto_exec:
+    run_analysis = True
+  elif no_exec:
+    run_analysis = False
+  else:
+    run_analysis = query_yes_no("Start jobs ?")
   if run_analysis:
     analysis.run()
   else:
     sys.exit(0)
-

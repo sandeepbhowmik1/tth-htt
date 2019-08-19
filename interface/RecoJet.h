@@ -1,82 +1,88 @@
 #ifndef tthAnalysis_HiggsToTauTau_RecoJet_h
 #define tthAnalysis_HiggsToTauTau_RecoJet_h
 
-#include "tthAnalysis/HiggsToTauTau/interface/GenJet.h" // GenJet
-#include "tthAnalysis/HiggsToTauTau/interface/GenLepton.h" // GenLepton
-#include "tthAnalysis/HiggsToTauTau/interface/GenHadTau.h" // GenHadTau
+/** \class RecoJet
+ *
+ * Class to access information for "resolved" jets, 
+ * reconstructed by anti-kT algorithm with dR=0.4
+ *
+ * \author Christian Veelken, Tallinn
+ *
+ */
 
-#include <map>
-#include <ostream>
+#include "tthAnalysis/HiggsToTauTau/interface/RecoJetBase.h" // RecoJetBase
+
+#include <map> // std::map<,>
+
+enum class Btag;
 
 class RecoJet
-  : public GenJet
+  : public RecoJetBase
 {
 public:
   RecoJet() = default;
-  RecoJet(Double_t pt,
-          Double_t eta,
-          Double_t phi,
-          Double_t mass,
-	  Double_t corr,
-	  Double_t corr_JECUp,
-	  Double_t corr_JECDown,
-	  Double_t BtagCSV,          
-	  Double_t BtagWeight,
-	  Double_t QGDiscr,
-	  Int_t heppyFlavour,
+  RecoJet(const GenJet & particle,
+          Double_t charge,
+          Double_t BtagCSV,
+          Double_t BtagWeight,
+          Double_t QGDiscr,
+          Double_t pullEta,
+          Double_t pullPhi,
+          Double_t pullMag,
+          Int_t jetId,
+          Int_t puId,
+          Int_t genMatchIdx,
           Int_t idx);
 
-  /**
-   * @brief Set links to generator level particles (matched by dR)
-   */
-  void set_genLepton(const GenLepton* genLepton) { genLepton_ = genLepton; }
-  void set_genHadTau(const GenHadTau* genHadTau) { genHadTau_ = genHadTau; }
-  void set_genJet(const GenJet* genJet) { genJet_ = genJet; }
+  virtual ~RecoJet();
 
   /**
    * @brief Funtions to access data-members
    * @return Values of data-members
    */
-  Double_t corr() const { return corr_; }  
-  Double_t corr_JECUp() const { return corr_JECUp_; }
-  Double_t corr_JECDown() const { return corr_JECDown_; }
-  Double_t BtagCSV() const { return BtagCSV_; }
-  Double_t BtagWeight() const { return BtagWeight_; }
-  Double_t QGDiscr() const { return QGDiscr_; }
-  Int_t heppyFlavour() const { return heppyFlavour_; }
-  Int_t idx() const { return idx_; }
+  Double_t charge() const;
+  Double_t BtagCSV() const;
+  Double_t BtagCSV(Btag btag) const;
+  Double_t BtagWeight() const;
+  Double_t QGDiscr() const;
+  Double_t pullEta() const;
+  Double_t pullPhi() const;
+  Double_t pullMag() const;
+  Int_t jetId() const;
+  Int_t puId() const;
+  Int_t genMatchIdx() const;
 
-  const GenLepton* genLepton() const { return genLepton_; }
-  const GenHadTau* genHadTau() const { return genHadTau_; }
-  const GenJet* genJet() const { return genJet_; }
+  Double_t maxPt() const;
+
+  bool hasBtag(Btag btag) const;
 
   friend class RecoJetReader;
   friend class RecoJetWriter;
 
- protected:
-  Double_t corr_;         ///< nominal jet energy correction (L1FastL2L3 for MC, L1FastL2L3Residual for data)
-  Double_t corr_JECUp_;   ///< +1 sigma (upward shifted) jet energy correction
-  Double_t corr_JECDown_; ///< -1 sigma (downward shifted) jet energy correction
-  Double_t BtagCSV_;      ///< CSV b-tagging discriminator value
-  Double_t BtagWeight_;   ///< weight for data/MC correction of b-tagging efficiency and mistag rate
-  Double_t QGDiscr_;      ///< quark/gluon discriminator
-  Int_t heppyFlavour_;    ///< Jet heppy flavour
-  Int_t idx_;             ///< index of jet in the ntuple
+protected:
+  Double_t jetCharge_;  ///< jet charge, computed according to JME-13-006
+  Double_t BtagCSV_;    ///< CSV b-tagging discriminator value
+  Double_t BtagWeight_; ///< weight for data/MC correction of b-tagging efficiency and mistag rate
+  Double_t QGDiscr_;    ///< quark/gluon discriminator
+  Double_t pullEta_;    ///< eta component of pull vector, computed according to arXiv:1001.5027
+  Double_t pullPhi_;    ///< phi component of pull vector, computed according to arXiv:1001.5027
+  Double_t pullMag_;    ///< magnitude of pull vector, computed according to arXiv:1001.5027
+  Int_t jetId_;         ///< jet ID, as explained in https://twiki.cern.ch/twiki/bin/view/CMS/JetID
+  Int_t puId_;          ///< pileup jet ID, as explained in https://twiki.cern.ch/twiki/bin/viewauth/CMS/PileupJetID
+  Int_t genMatchIdx_;   ///< index to gen jet
 
   //---------------------------------------------------------
   // CV: needed by RecoJetWriter
-  Double_t BtagCSVwHipMitigation_;  
-  Double_t BtagCSVwoHipMitigation_; 
-  std::map<int, Double_t> BtagWeight_systematics_; 
+  std::map<Btag, std::map<int, Double_t>> BtagWeight_systematics_;
+  std::map<Btag, Double_t> BtagCSVs_;
+  std::map<int, Double_t> pt_systematics_;
+  std::map<int, Double_t> mass_systematics_;
   //---------------------------------------------------------
-
-//--- matching to generator level particles
-  const GenLepton* genLepton_;
-  const GenHadTau* genHadTau_;
-  const GenJet* genJet_;
 };
 
-std::ostream& operator<<(std::ostream& stream, const RecoJet& jet);
+std::ostream &
+operator<<(std::ostream & stream,
+           const RecoJet & jet);
 
 #endif // tthAnalysis_HiggsToTauTau_RecoJet_h
 

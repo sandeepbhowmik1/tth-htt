@@ -1,20 +1,27 @@
 #include "tthAnalysis/HiggsToTauTau/interface/GenParticleWriter.h" // GenParticleWriter
 
-#include "FWCore/Utilities/interface/Exception.h"
+#include "tthAnalysis/HiggsToTauTau/interface/BranchAddressInitializer.h" // BranchAddressInitializer, TTree, Form()
 
-#include "tthAnalysis/HiggsToTauTau/interface/writerAuxFunctions.h" // setBranchI, setBranchVI, setBranchVF
+GenParticleWriter::GenParticleWriter(const std::string & branchName_obj,
+                                     unsigned int max_nParticles)
+  : GenParticleWriter(Form("n%s", branchName_obj.data()), branchName_obj, max_nParticles)
+{}
 
-#include <TString.h> // Form
-
-GenParticleWriter::GenParticleWriter(const std::string& branchName_num, const std::string& branchName_obj)
-  : max_nParticles_(32)
+GenParticleWriter::GenParticleWriter(const std::string & branchName_num,
+                                     const std::string & branchName_obj,
+                                     unsigned int max_nParticles)
+  : max_nParticles_(max_nParticles)
   , branchName_num_(branchName_num)
   , branchName_obj_(branchName_obj)
-  , particle_pt_(0)
-  , particle_eta_(0)
-  , particle_phi_(0)
-  , particle_mass_(0)
-  , particle_pdgId_(0)
+  , particle_pt_(nullptr)
+  , particle_eta_(nullptr)
+  , particle_phi_(nullptr)
+  , particle_mass_(nullptr)
+  , particle_pdgId_(nullptr)
+  , particle_charge_(nullptr)
+  , particle_status_(nullptr)
+  , particle_statusFlags_(nullptr)
+  , particle_genPartFlav_(nullptr)
 {
   setBranchNames();
 }
@@ -26,6 +33,10 @@ GenParticleWriter::~GenParticleWriter()
   delete[] particle_phi_;
   delete[] particle_mass_;
   delete[] particle_pdgId_;
+  delete[] particle_charge_;
+  delete[] particle_status_;
+  delete[] particle_statusFlags_;
+  delete[] particle_genPartFlav_;
 }
 
 void GenParticleWriter::setBranchNames()
@@ -35,32 +46,41 @@ void GenParticleWriter::setBranchNames()
   branchName_phi_ = Form("%s_%s", branchName_obj_.data(), "phi");
   branchName_mass_ = Form("%s_%s", branchName_obj_.data(), "mass");
   branchName_pdgId_ = Form("%s_%s", branchName_obj_.data(), "pdgId");
+  branchName_charge_ = Form("%s_%s", branchName_obj_.data(), "charge");
+  branchName_status_ = Form("%s_%s", branchName_obj_.data(), "status");
+  branchName_statusFlags_ = Form("%s_%s", branchName_obj_.data(), "statusFlags");
+  branchName_genPartFlav_ = Form("%s_%s", branchName_obj_.data(), "genPartFlav");
 }
 
-void GenParticleWriter::setBranches(TTree* tree)
+void GenParticleWriter::setBranches(TTree * tree)
 {
-  setBranchI(tree, branchName_num_, &nParticles_);
-  particle_pt_ = new Float_t[max_nParticles_];
-  setBranchVF(tree, branchName_pt_, branchName_num_, particle_pt_);
-  particle_eta_ = new Float_t[max_nParticles_];
-  setBranchVF(tree, branchName_eta_, branchName_num_, particle_eta_); 
-  particle_phi_ = new Float_t[max_nParticles_];
-  setBranchVF(tree, branchName_phi_, branchName_num_, particle_phi_); 
-  particle_mass_ = new Float_t[max_nParticles_];
-  setBranchVF(tree, branchName_mass_, branchName_num_, particle_mass_); 
-  particle_pdgId_ = new Int_t[max_nParticles_];
-  setBranchVI(tree, branchName_pdgId_, branchName_num_, particle_pdgId_); 
+  BranchAddressInitializer bai(tree, max_nParticles_, branchName_num_);
+  bai.setBranch(nParticles_, branchName_num_);
+  bai.setBranch(particle_pt_, branchName_pt_);
+  bai.setBranch(particle_eta_, branchName_eta_);
+  bai.setBranch(particle_phi_, branchName_phi_);
+  bai.setBranch(particle_mass_, branchName_mass_);
+  bai.setBranch(particle_pdgId_, branchName_pdgId_);
+  bai.setBranch(particle_charge_, branchName_charge_);
+  bai.setBranch(particle_status_, branchName_status_);
+  bai.setBranch(particle_statusFlags_, branchName_statusFlags_);
+  bai.setBranch(particle_genPartFlav_, branchName_genPartFlav_);
 }
 
-void GenParticleWriter::write(const std::vector<GenLepton>& particles)
+void GenParticleWriter::write(const std::vector<GenParticle> & particles)
 {
   nParticles_ = particles.size();
-  for ( Int_t idxParticle = 0; idxParticle < nParticles_; ++idxParticle ) {
-    const GenLepton& particle = particles[idxParticle];
+  for(UInt_t idxParticle = 0; idxParticle < nParticles_; ++idxParticle)
+  {
+    const GenParticle & particle = particles[idxParticle];
     particle_pt_[idxParticle] = particle.pt();
     particle_eta_[idxParticle] = particle.eta();
     particle_phi_[idxParticle] = particle.phi();
     particle_mass_[idxParticle] = particle.mass();
     particle_pdgId_[idxParticle] = particle.pdgId();
+    particle_charge_[idxParticle] = particle.charge();
+    particle_status_[idxParticle] = particle.status();
+    particle_statusFlags_[idxParticle] = particle.statusFlags();
+    particle_genPartFlav_[idxParticle] = particle.genPartFlav();
   }
 }

@@ -1,419 +1,546 @@
 #include "tthAnalysis/HiggsToTauTau/interface/SyncNtupleManager.h"
-#include "tthAnalysis/HiggsToTauTau/interface/mvaInputVariables.h" // comp_lep*_conePt()
 
-#include <algorithm> // std::min()
-#include <type_traits> // std::remove_pointer<>
+#include "tthAnalysis/HiggsToTauTau/interface/RecoMuon.h" // RecoMuon
+#include "tthAnalysis/HiggsToTauTau/interface/RecoElectron.h" // RecoElectron
+#include "tthAnalysis/HiggsToTauTau/interface/RecoHadTau.h" // RecoHadTau
+#include "tthAnalysis/HiggsToTauTau/interface/RecoJet.h" // RecoJet
+#include "tthAnalysis/HiggsToTauTau/interface/RecoJetAK8.h" // RecoJetAK8
+#include "tthAnalysis/HiggsToTauTau/interface/hltPath.h" // hltPath
+#include "tthAnalysis/HiggsToTauTau/interface/analysisAuxFunctions.h" // as_integer()
+
+#include <TFile.h> // TFile
 
 #include <boost/algorithm/string/predicate.hpp> // boost::starts_with()
 
-#include <TString.h> // Form()
-
-#include <FWCore/Utilities/interface/Exception.h> // cms::Exception
-
-const Int_t SyncNtupleManager::placeholder_value = -9999;
+#include <algorithm> // std::min()
 
 SyncNtupleManager::SyncNtupleManager(const std::string & outputFileName,
-                                     const std::string & outputTreeName)
-  : nof_mus(2)
+                                     const std::string & outputTreeName,
+                                     SyncGenMatchCharge genMatchOpt)
+  : SyncNtupleManager(new TFile(outputFileName.c_str(), "recreate"), outputTreeName, genMatchOpt)
+{
+  outputFile_owner = true;
+}
+
+SyncNtupleManager::SyncNtupleManager(TFile * outputFilePtr,
+                                     const std::string & outputTreeName,
+                                     SyncGenMatchCharge genMatchOpt)
+  : SyncNtupleManagerBase(outputFilePtr, outputTreeName)
+  , outputFile_owner(false)
+  , genMatchCharge_leptons(genMatchOpt == SyncGenMatchCharge::kLepton || genMatchOpt == SyncGenMatchCharge::kAll)
+  , genMatchCharge_taus   (genMatchOpt == SyncGenMatchCharge::kHadTau || genMatchOpt == SyncGenMatchCharge::kAll)
+  , nof_leps(4)
+  , nof_mus(2)
   , nof_eles(2)
   , nof_taus(2)
   , nof_jets(4)
+  , nof_fwdJets(4)
+  , nof_jetAK8(2)
 {
-  outputFile = new TFile(outputFileName.c_str(), "recreate");
-  outputTree = new TTree(outputTreeName.c_str(), outputTreeName.c_str());
+  for(int var = as_integer(FloatVariableType::PFMET); var <= as_integer(FloatVariableType::genWeight); ++var)
+  {
+    floatMap[static_cast<FloatVariableType>(var)] = placeholder_value;
+  }
 }
 
 SyncNtupleManager::~SyncNtupleManager()
 {
-  outputFile -> Close();
-  if(outputFile)  delete outputFile;
-  outputTree = nullptr;
-  outputFile = nullptr;
+  if(outputFile_owner)
+  {
+    outputFile -> Close();
+    delete outputFile;
+    outputFile = nullptr;
+  }
 }
 
 void
 SyncNtupleManager::initializeBranches()
 {
-  mu_pt = new std::remove_pointer<decltype(mu_pt)>::type[nof_mus];
-  mu_eta = new std::remove_pointer<decltype(mu_eta)>::type[nof_mus];
-  mu_phi = new std::remove_pointer<decltype(mu_phi)>::type[nof_mus];
-  mu_E = new std::remove_pointer<decltype(mu_E)>::type[nof_mus];
-  mu_charge = new std::remove_pointer<decltype(mu_charge)>::type[nof_mus];
-  mu_miniRelIso = new std::remove_pointer<decltype(mu_miniRelIso)>::type[nof_mus];
-  mu_miniIsoCharged = new std::remove_pointer<decltype(mu_miniIsoCharged)>::type[nof_mus];
-  mu_miniIsoNeutral = new std::remove_pointer<decltype(mu_miniIsoNeutral)>::type[nof_mus];
-  mu_jetNDauChargedMVASel = new std::remove_pointer<decltype(mu_jetNDauChargedMVASel)>::type[nof_mus];
-  mu_jetPtRel = new std::remove_pointer<decltype(mu_jetPtRel)>::type[nof_mus];
-  mu_jetPtRatio = new std::remove_pointer<decltype(mu_jetPtRatio)>::type[nof_mus];
-  mu_jetCSV = new std::remove_pointer<decltype(mu_jetCSV)>::type[nof_mus];
-  mu_sip3D = new std::remove_pointer<decltype(mu_sip3D)>::type[nof_mus];
-  mu_dxy = new std::remove_pointer<decltype(mu_dxy)>::type[nof_mus];
-  mu_dz = new std::remove_pointer<decltype(mu_dz)>::type[nof_mus];
-  mu_segmentCompatibility = new std::remove_pointer<decltype(mu_segmentCompatibility)>::type[nof_mus];
-  mu_leptonMVA = new std::remove_pointer<decltype(mu_leptonMVA)>::type[nof_mus];
-  mu_conept = new std::remove_pointer<decltype(mu_conept)>::type[nof_mus];
-  mu_mediumID = new std::remove_pointer<decltype(mu_mediumID)>::type[nof_mus];
-#ifdef DPT_DIV_PT
-  mu_dpt_div_pt = new std::remove_pointer<decltype(mu_dpt_div_pt)>::type[nof_mus];
-#endif
-  mu_isfakeablesel = new std::remove_pointer<decltype(mu_isfakeablesel)>::type[nof_mus];
-  mu_iscutsel = new std::remove_pointer<decltype(mu_iscutsel)>::type[nof_mus];
-  mu_ismvasel = new std::remove_pointer<decltype(mu_ismvasel)>::type[nof_mus];
+  const char * lstr    = "lep";
+  const char * mstr    = "mu";
+  const char * estr    = "ele";
+  const char * tstr    = "tau";
+  const char * jstr    = "jet";
+  const char * jfstr   = "jetFwd";
+  const char * jak8str = "jetAK8";
 
-  ele_pt = new std::remove_pointer<decltype(ele_pt)>::type[nof_eles];
-  ele_eta = new std::remove_pointer<decltype(ele_eta)>::type[nof_eles];
-  ele_phi = new std::remove_pointer<decltype(ele_phi)>::type[nof_eles];
-  ele_E = new std::remove_pointer<decltype(ele_E)>::type[nof_eles];
-  ele_charge = new std::remove_pointer<decltype(ele_charge)>::type[nof_eles];
-  ele_miniRelIso = new std::remove_pointer<decltype(ele_miniRelIso)>::type[nof_eles];
-  ele_miniIsoCharged = new std::remove_pointer<decltype(ele_miniIsoCharged)>::type[nof_eles];
-  ele_miniIsoNeutral = new std::remove_pointer<decltype(ele_miniIsoNeutral)>::type[nof_eles];
-  ele_jetNDauChargedMVASel = new std::remove_pointer<decltype(ele_jetNDauChargedMVASel)>::type[nof_eles];
-  ele_jetPtRel = new std::remove_pointer<decltype(ele_jetPtRel)>::type[nof_eles];
-  ele_jetPtRatio = new std::remove_pointer<decltype(ele_jetPtRatio)>::type[nof_eles];
-  ele_jetCSV = new std::remove_pointer<decltype(ele_jetCSV)>::type[nof_eles];
-  ele_sip3D = new std::remove_pointer<decltype(ele_sip3D)>::type[nof_eles];
-  ele_dxy = new std::remove_pointer<decltype(ele_dxy)>::type[nof_eles];
-  ele_dz = new std::remove_pointer<decltype(ele_dz)>::type[nof_eles];
-  ele_ntMVAeleID = new std::remove_pointer<decltype(ele_ntMVAeleID)>::type[nof_eles];
-  ele_leptonMVA = new std::remove_pointer<decltype(ele_leptonMVA)>::type[nof_eles];
-  ele_conept = new std::remove_pointer<decltype(ele_conept)>::type[nof_eles];
-  ele_isChargeConsistent = new std::remove_pointer<decltype(ele_isChargeConsistent)>::type[nof_eles];
-  ele_passesConversionVeto = new std::remove_pointer<decltype(ele_passesConversionVeto)>::type[nof_eles];
-  ele_nMissingHits = new std::remove_pointer<decltype(ele_nMissingHits)>::type[nof_eles];
-  ele_isfakeablesel = new std::remove_pointer<decltype(ele_isfakeablesel)>::type[nof_eles];
-  ele_iscutsel = new std::remove_pointer<decltype(ele_iscutsel)>::type[nof_eles];
-  ele_ismvasel = new std::remove_pointer<decltype(ele_ismvasel)>::type[nof_eles];
+  const std::string n_sel_lep_str         = Form("n_%s",             lstr);
+  const std::string n_presel_mu_str       = Form("n_presel_%s",      mstr);
+  const std::string n_fakeablesel_mu_str  = Form("n_fakeablesel_%s", mstr);
+  const std::string n_mvasel_mu_str       = Form("n_mvasel_%s",      mstr);
+  const std::string n_presel_ele_str      = Form("n_presel_%s",      estr);
+  const std::string n_fakeablesel_ele_str = Form("n_fakeablesel_%s", estr);
+  const std::string n_mvasel_ele_str      = Form("n_mvasel_%s",      estr);
+  const std::string n_presel_tau_str      = Form("n_presel_%s",      tstr);
+  const std::string n_presel_jet_str      = Form("n_presel_%s",      jstr);
+  const std::string n_presel_fwdJet_str   = Form("n_presel_%s",      jfstr);
+  const std::string n_presel_jetAK8_str   = Form("n_presel_%s",      jak8str);
 
-  tau_pt = new std::remove_pointer<decltype(tau_pt)>::type[nof_eles];
-  tau_eta = new std::remove_pointer<decltype(tau_eta)>::type[nof_eles];
-  tau_phi = new std::remove_pointer<decltype(tau_phi)>::type[nof_eles];
-  tau_E = new std::remove_pointer<decltype(tau_E)>::type[nof_eles];
-  tau_charge = new std::remove_pointer<decltype(tau_charge)>::type[nof_eles];
-  tau_dxy = new std::remove_pointer<decltype(tau_dxy)>::type[nof_eles];
-  tau_dz = new std::remove_pointer<decltype(tau_dz)>::type[nof_eles];
-  tau_decayModeFindingOldDMs = new std::remove_pointer<decltype(tau_decayModeFindingOldDMs)>::type[nof_eles];
-  tau_decayModeFindingNewDMs = new std::remove_pointer<decltype(tau_decayModeFindingNewDMs)>::type[nof_eles];
-  tau_byCombinedIsolationDeltaBetaCorr3Hits = new std::remove_pointer<decltype(tau_byCombinedIsolationDeltaBetaCorr3Hits)>::type[nof_eles];
-  tau_byLooseCombinedIsolationDeltaBetaCorr3Hits = new std::remove_pointer<decltype(tau_byLooseCombinedIsolationDeltaBetaCorr3Hits)>::type[nof_eles];
-  tau_byMediumCombinedIsolationDeltaBetaCorr3Hits = new std::remove_pointer<decltype(tau_byMediumCombinedIsolationDeltaBetaCorr3Hits)>::type[nof_eles];
-  tau_byTightCombinedIsolationDeltaBetaCorr3Hits = new std::remove_pointer<decltype(tau_byTightCombinedIsolationDeltaBetaCorr3Hits)>::type[nof_eles];
-  tau_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03 = new std::remove_pointer<decltype(tau_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03)>::type[nof_eles];
-  tau_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03 = new std::remove_pointer<decltype(tau_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03)>::type[nof_eles];
-  tau_byTightCombinedIsolationDeltaBetaCorr3HitsdR03 = new std::remove_pointer<decltype(tau_byTightCombinedIsolationDeltaBetaCorr3HitsdR03)>::type[nof_eles];
-  tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT = new std::remove_pointer<decltype(tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT)>::type[nof_eles];
-  tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT = new std::remove_pointer<decltype(tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT)>::type[nof_eles];
-  tau_byTightIsolationMVArun2v1DBdR03oldDMwLT = new std::remove_pointer<decltype(tau_byTightIsolationMVArun2v1DBdR03oldDMwLT)>::type[nof_eles];
-  tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT = new std::remove_pointer<decltype(tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT)>::type[nof_eles];
-  tau_againstMuonLoose3 = new std::remove_pointer<decltype(tau_againstMuonLoose3)>::type[nof_eles];
-  tau_againstMuonTight3 = new std::remove_pointer<decltype(tau_againstMuonTight3)>::type[nof_eles];
-  tau_againstElectronVLooseMVA6 = new std::remove_pointer<decltype(tau_againstElectronVLooseMVA6)>::type[nof_eles];
-  tau_againstElectronLooseMVA6 = new std::remove_pointer<decltype(tau_againstElectronLooseMVA6)>::type[nof_eles];
-  tau_againstElectronMediumMVA6 = new std::remove_pointer<decltype(tau_againstElectronMediumMVA6)>::type[nof_eles];
-  tau_againstElectronTightMVA6 = new std::remove_pointer<decltype(tau_againstElectronTightMVA6)>::type[nof_eles];
-  tau_againstElectronVTightMVA6 = new std::remove_pointer<decltype(tau_againstElectronVTightMVA6)>::type[nof_eles];
+  setBranches(
+    nEvent,            "nEvent",
+    ls,                "ls",
+    run,               "run",
+    n_sel_lep,         n_sel_lep_str,
+    n_presel_mu,       n_presel_mu_str,
+    n_fakeablesel_mu,  n_fakeablesel_mu_str,
+    n_mvasel_mu,       n_mvasel_mu_str,
+    n_presel_ele,      n_presel_ele_str,
+    n_fakeablesel_ele, n_fakeablesel_ele_str,
+    n_mvasel_ele,      n_mvasel_ele_str,
+    n_presel_tau,      n_presel_tau_str,
+    n_presel_jet,      n_presel_jet_str,
+    n_presel_fwdJet,   n_presel_fwdJet_str,
+    n_presel_jetAK8,   n_presel_jetAK8_str,
 
-  jet_pt = new std::remove_pointer<decltype(jet_pt)>::type[nof_eles];
-  jet_eta = new std::remove_pointer<decltype(jet_eta)>::type[nof_eles];
-  jet_phi = new std::remove_pointer<decltype(jet_phi)>::type[nof_eles];
-  jet_E = new std::remove_pointer<decltype(jet_E)>::type[nof_eles];
-  jet_CSV = new std::remove_pointer<decltype(jet_CSV)>::type[nof_eles];
+//--- MET/MHT
+    floatMap[FloatVariableType::PFMET],                    "PFMET",
+    floatMap[FloatVariableType::PFMETphi],                 "PFMETphi",
+    floatMap[FloatVariableType::MHT],                      "MHT",
+    floatMap[FloatVariableType::metLD],                    "metLD",
 
-  if(outputTree)
-  {
-    const char * mstr = "mu";
-    const char * estr = "ele";
-    const char * tstr = "tau";
-    const char * jstr = "jet";
+//--- Additional event-level MVA input variables
+    isGenMatched,                                          "isGenMatched",
+    is_like_tH_not_ttH,                                    "is_tH_like_and_not_ttH_like",
 
-    outputTree -> Branch("nEvent", &(nEvent), Form("nEvent/%s", Traits<decltype(nEvent)>::TYPE_NAME));
-    outputTree -> Branch("ls", &(ls), Form("ls/%s", Traits<decltype(ls)>::TYPE_NAME));
-    outputTree -> Branch("run", &(run), Form("run/%s", Traits<decltype(run)>::TYPE_NAME));
+    floatMap[FloatVariableType::mindr_lep1_jet],           "mindr_lep1_jet",
+    floatMap[FloatVariableType::mindr_lep2_jet],           "mindr_lep2_jet",
+    floatMap[FloatVariableType::mindr_lep3_jet],           "mindr_lep3_jet",
+    floatMap[FloatVariableType::mindr_lep4_jet],           "mindr_lep4_jet",
 
-    outputTree -> Branch(Form("n_presel_%s", mstr), &(n_presel_mu), Form("n_presel_%s/%s", mstr, Traits<decltype(n_presel_mu)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_fakeablesel_%s", mstr), &(n_fakeablesel_mu), Form("n_fakeablesel_%s/%s", mstr, Traits<decltype(n_fakeablesel_mu)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_cutsel_%s", mstr), &(n_cutsel_mu), Form("n_cutsel_%s/%s", mstr, Traits<decltype(n_cutsel_mu)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_mvasel_%s", mstr), &(n_mvasel_mu), Form("n_mvasel_%s/%s", mstr, Traits<decltype(n_mvasel_mu)>::TYPE_NAME));
+    floatMap[FloatVariableType::mindr_tau1_jet],           "mindr_tau1_jet",
+    floatMap[FloatVariableType::mindr_tau2_jet],           "mindr_tau2_jet",
 
-    outputTree -> Branch(Form("n_presel_%s", estr), &(n_presel_ele), Form("n_presel_%s/%s", estr, Traits<decltype(n_presel_ele)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_fakeablesel_%s", estr), &(n_fakeablesel_ele), Form("n_fakeablesel_%s/%s", estr, Traits<decltype(n_fakeablesel_ele)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_cutsel_%s", estr), &(n_cutsel_ele), Form("n_cutsel_%s/%s", estr, Traits<decltype(n_cutsel_ele)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_mvasel_%s", estr), &(n_mvasel_ele), Form("n_mvasel_%s/%s", estr, Traits<decltype(n_mvasel_ele)>::TYPE_NAME));
+    floatMap[FloatVariableType::avg_dr_jet],               "avg_dr_jet",
+    floatMap[FloatVariableType::avr_dr_lep_tau],           "avr_dr_lep_tau",
+    floatMap[FloatVariableType::max_dr_jet],               "max_dr_jet",
+    floatMap[FloatVariableType::max_dr_lep_tau],           "max_dr_lep_tau",
+    floatMap[FloatVariableType::min_dr_tau_jet],           "mindr_tau_jet",
+    floatMap[FloatVariableType::min_dr_lep_tau],           "min_dr_lep_tau",
+    floatMap[FloatVariableType::min_dr_lep_jet],           "min_dr_lep_jet",
 
-    outputTree -> Branch(Form("n_presel_%s", tstr), &(n_presel_tau), Form("n_presel_%s/%s", tstr, Traits<decltype(n_presel_tau)>::TYPE_NAME));
-    outputTree -> Branch(Form("n_presel_%s", jstr), &(n_presel_jet), Form("n_presel_%s/%s", jstr, Traits<decltype(n_presel_jet)>::TYPE_NAME));
+    floatMap[FloatVariableType::dr_leps],                  "dr_leps",
+    floatMap[FloatVariableType::dr_taus],                  "dr_taus",
 
-    for(Int_t i = 0; i < nof_mus; ++i)
-    {
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "pt"), &(mu_pt[i]), Form("%s%d_%s/%s", mstr, i, "pt", Traits<decltype(mu_pt)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "eta"), &(mu_eta[i]), Form("%s%d_%s/%s", mstr, i, "eta", Traits<decltype(mu_eta)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "phi"), &(mu_phi[i]), Form("%s%d_%s/%s", mstr, i, "phi", Traits<decltype(mu_phi)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "E"), &(mu_E[i]), Form("%s%d_%s/%s", mstr, i, "E", Traits<decltype(mu_E)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "charge"), &(mu_charge[i]), Form("%s%d_%s/%s", mstr, i, "charge", Traits<decltype(mu_charge)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "miniRelIso"), &(mu_miniRelIso[i]), Form("%s%d_%s/%s", mstr, i, "miniRelIso", Traits<decltype(mu_miniRelIso)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "miniIsoCharged"), &(mu_miniIsoCharged[i]), Form("%s%d_%s/%s", mstr, i, "miniIsoCharged", Traits<decltype(mu_miniIsoCharged)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "miniIsoNeutral"), &(mu_miniIsoNeutral[i]), Form("%s%d_%s/%s", mstr, i, "miniIsoNeutral", Traits<decltype(mu_miniIsoNeutral)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "jetNDauChargedMVASel"), &(mu_jetNDauChargedMVASel[i]), Form("%s%d_%s/%s", mstr, i, "jetNDauChargedMVASel", Traits<decltype(mu_jetNDauChargedMVASel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "jetPtRel"), &(mu_jetPtRel[i]), Form("%s%d_%s/%s", mstr, i, "jetPtRel", Traits<decltype(mu_jetPtRel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "jetPtRatio"), &(mu_jetPtRatio[i]), Form("%s%d_%s/%s", mstr, i, "jetPtRatio", Traits<decltype(mu_jetPtRatio)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "jetCSV"), &(mu_jetCSV[i]), Form("%s%d_%s/%s", mstr, i, "jetCSV", Traits<decltype(mu_jetCSV)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "sip3D"), &(mu_sip3D[i]), Form("%s%d_%s/%s", mstr, i, "sip3D", Traits<decltype(mu_sip3D)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "dxy"), &(mu_dxy[i]), Form("%s%d_%s/%s", mstr, i, "dxy", Traits<decltype(mu_dxy)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "dz"), &(mu_dz[i]), Form("%s%d_%s/%s", mstr, i, "dz", Traits<decltype(mu_dz)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "segmentCompatibility"), &(mu_segmentCompatibility[i]), Form("%s%d_%s/%s", mstr, i, "segmentCompatibility", Traits<decltype(mu_segmentCompatibility)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "leptonMVA"), &(mu_leptonMVA[i]), Form("%s%d_%s/%s", mstr, i, "leptonMVA", Traits<decltype(mu_leptonMVA)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "conept"), &(mu_conept[i]), Form("%s%d_%s/%s", mstr, i, "conept", Traits<decltype(mu_conept)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "mediumID"), &(mu_mediumID[i]), Form("%s%d_%s/%s", mstr, i, "mediumID", Traits<decltype(mu_mediumID)>::TYPE_NAME));
-#ifdef DPT_DIV_PT
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "dpt_div_pt"), &(mu_dpt_div_pt[i]), Form("%s%d_%s/%s", mstr, i, "dpt_div_pt", Traits<decltype(mu_dpt_div_pt)>::TYPE_NAME));
-#endif
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "isfakeablesel"), &(mu_isfakeablesel[i]), Form("%s%d_%s/%s", mstr, i, "isfakeablesel", Traits<decltype(mu_isfakeablesel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "iscutsel"), &(mu_iscutsel[i]), Form("%s%d_%s/%s", mstr, i, "iscutsel", Traits<decltype(mu_iscutsel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", mstr, i, "ismvasel"), &(mu_ismvasel[i]), Form("%s%d_%s/%s", mstr, i, "ismvasel", Traits<decltype(mu_ismvasel)>::TYPE_NAME));
-    }
+    floatMap[FloatVariableType::dr_lep_tau_ss],            "dR_lep_tau_ss",
+    floatMap[FloatVariableType::dr_lep1_tau1],             "dr_lep1_tau",
+    floatMap[FloatVariableType::dr_lep2_tau1],             "dr_lep2_tau",
+    floatMap[FloatVariableType::dr_lep3_tau1],             "dR_lep3_tau",
+    floatMap[FloatVariableType::dr_lep1_tau2],             "dR_lep1_tau2",
+    floatMap[FloatVariableType::dr_lep2_tau2],             "dR_lep2_tau2",
 
-    for(Int_t i = 0; i < nof_eles; ++i)
-    {
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "pt"), &(ele_pt[i]), Form("%s%d_%s/%s", estr, i, "pt", Traits<decltype(ele_pt)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "eta"), &(ele_eta[i]), Form("%s%d_%s/%s", estr, i, "eta", Traits<decltype(ele_eta)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "phi"), &(ele_phi[i]), Form("%s%d_%s/%s", estr, i, "phi", Traits<decltype(ele_phi)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "E"), &(ele_E[i]), Form("%s%d_%s/%s", estr, i, "E", Traits<decltype(ele_E)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "charge"), &(ele_charge[i]), Form("%s%d_%s/%s", estr, i, "charge", Traits<decltype(ele_charge)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "miniRelIso"), &(ele_miniRelIso[i]), Form("%s%d_%s/%s", estr, i, "miniRelIso", Traits<decltype(ele_miniRelIso)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "miniIsoCharged"), &(ele_miniIsoCharged[i]), Form("%s%d_%s/%s", estr, i, "miniIsoCharged", Traits<decltype(ele_miniIsoCharged)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "miniIsoNeutral"), &(ele_miniIsoNeutral[i]), Form("%s%d_%s/%s", estr, i, "miniIsoNeutral", Traits<decltype(ele_miniIsoNeutral)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "jetNDauChargedMVASel"), &(ele_jetNDauChargedMVASel[i]), Form("%s%d_%s/%s", estr, i, "jetNDauChargedMVASel", Traits<decltype(ele_jetNDauChargedMVASel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "jetPtRel"), &(ele_jetPtRel[i]), Form("%s%d_%s/%s", estr, i, "jetPtRel", Traits<decltype(ele_jetPtRel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "jetPtRatio"), &(ele_jetPtRatio[i]), Form("%s%d_%s/%s", estr, i, "jetPtRatio", Traits<decltype(ele_jetPtRatio)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "jetCSV"), &(ele_jetCSV[i]), Form("%s%d_%s/%s", estr, i, "jetCSV", Traits<decltype(ele_jetCSV)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "sip3D"), &(ele_sip3D[i]), Form("%s%d_%s/%s", estr, i, "sip3D", Traits<decltype(ele_sip3D)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "dxy"), &(ele_dxy[i]), Form("%s%d_%s/%s", estr, i, "dxy", Traits<decltype(ele_dxy)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "dz"), &(ele_dz[i]), Form("%s%d_%s/%s", estr, i, "dz", Traits<decltype(ele_dz)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "ntMVAeleID"), &(ele_ntMVAeleID[i]), Form("%s%d_%s/%s", estr, i, "ntMVAeleID", Traits<decltype(ele_ntMVAeleID)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "leptonMVA"), &(ele_leptonMVA[i]), Form("%s%d_%s/%s", estr, i, "leptonMVA", Traits<decltype(ele_leptonMVA)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "conept"), &(ele_conept[i]), Form("%s%d_%s/%s", estr, i, "conept", Traits<decltype(ele_conept)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "isChargeConsistent"), &(ele_isChargeConsistent[i]), Form("%s%d_%s/%s", estr, i, "isChargeConsistent", Traits<decltype(ele_isChargeConsistent)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "passesConversionVeto"), &(ele_passesConversionVeto[i]), Form("%s%d_%s/%s", estr, i, "passesConversionVeto", Traits<decltype(ele_passesConversionVeto)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "nMissingHits"), &(ele_nMissingHits[i]), Form("%s%d_%s/%s", estr, i, "nMissingHits", Traits<decltype(ele_nMissingHits)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "isfakeablesel"), &(ele_isfakeablesel[i]), Form("%s%d_%s/%s", estr, i, "isfakeablesel", Traits<decltype(ele_isfakeablesel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "iscutsel"), &(ele_iscutsel[i]), Form("%s%d_%s/%s", estr, i, "iscutsel", Traits<decltype(ele_iscutsel)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", estr, i, "ismvasel"), &(ele_ismvasel[i]), Form("%s%d_%s/%s", estr, i, "ismvasel", Traits<decltype(ele_ismvasel)>::TYPE_NAME));
-    }
+    floatMap[FloatVariableType::max_lep_eta],              "max_lep_eta",
 
-    for(Int_t i = 0; i < nof_taus; ++i)
-    {
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "pt"), &(tau_pt[i]), Form("%s%d_%s/%s", tstr, i, "pt", Traits<decltype(tau_pt)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "eta"), &(tau_eta[i]), Form("%s%d_%s/%s", tstr, i, "eta", Traits<decltype(tau_eta)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "phi"), &(tau_phi[i]), Form("%s%d_%s/%s", tstr, i, "phi", Traits<decltype(tau_phi)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "E"), &(tau_E[i]), Form("%s%d_%s/%s", tstr, i, "E", Traits<decltype(tau_E)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "charge"), &(tau_charge[i]), Form("%s%d_%s/%s", tstr, i, "charge", Traits<decltype(tau_charge)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "dxy"), &(tau_dxy[i]), Form("%s%d_%s/%s", tstr, i, "dxy", Traits<decltype(tau_dxy)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "dz"), &(tau_dz[i]), Form("%s%d_%s/%s", tstr, i, "dz", Traits<decltype(tau_dz)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "decayModeFindingOldDMs"), &(tau_decayModeFindingOldDMs[i]), Form("%s%d_%s/%s", tstr, i, "decayModeFindingOldDMs", Traits<decltype(tau_decayModeFindingOldDMs)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "decayModeFindingNewDMs"), &(tau_decayModeFindingNewDMs[i]), Form("%s%d_%s/%s", tstr, i, "decayModeFindingNewDMs", Traits<decltype(tau_decayModeFindingNewDMs)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byCombinedIsolationDeltaBetaCorr3Hits"), &(tau_byCombinedIsolationDeltaBetaCorr3Hits[i]), Form("%s%d_%s/%s", tstr, i, "byCombinedIsolationDeltaBetaCorr3Hits", Traits<decltype(tau_byCombinedIsolationDeltaBetaCorr3Hits)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byLooseCombinedIsolationDeltaBetaCorr3Hits"), &(tau_byLooseCombinedIsolationDeltaBetaCorr3Hits[i]), Form("%s%d_%s/%s", tstr, i, "byLooseCombinedIsolationDeltaBetaCorr3Hits", Traits<decltype(tau_byLooseCombinedIsolationDeltaBetaCorr3Hits)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byMediumCombinedIsolationDeltaBetaCorr3Hits"), &(tau_byMediumCombinedIsolationDeltaBetaCorr3Hits[i]), Form("%s%d_%s/%s", tstr, i, "byMediumCombinedIsolationDeltaBetaCorr3Hits", Traits<decltype(tau_byMediumCombinedIsolationDeltaBetaCorr3Hits)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byTightCombinedIsolationDeltaBetaCorr3Hits"), &(tau_byTightCombinedIsolationDeltaBetaCorr3Hits[i]), Form("%s%d_%s/%s", tstr, i, "byTightCombinedIsolationDeltaBetaCorr3Hits", Traits<decltype(tau_byTightCombinedIsolationDeltaBetaCorr3Hits)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byLooseCombinedIsolationDeltaBetaCorr3HitsdR03"), &(tau_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03[i]), Form("%s%d_%s/%s", tstr, i, "byLooseCombinedIsolationDeltaBetaCorr3HitsdR03", Traits<decltype(tau_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byMediumCombinedIsolationDeltaBetaCorr3HitsdR03"), &(tau_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03[i]), Form("%s%d_%s/%s", tstr, i, "byMediumCombinedIsolationDeltaBetaCorr3HitsdR03", Traits<decltype(tau_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byTightCombinedIsolationDeltaBetaCorr3HitsdR03"), &(tau_byTightCombinedIsolationDeltaBetaCorr3HitsdR03[i]), Form("%s%d_%s/%s", tstr, i, "byTightCombinedIsolationDeltaBetaCorr3HitsdR03", Traits<decltype(tau_byTightCombinedIsolationDeltaBetaCorr3HitsdR03)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byLooseIsolationMVArun2v1DBdR03oldDMwLT"), &(tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT[i]), Form("%s%d_%s/%s", tstr, i, "byLooseIsolationMVArun2v1DBdR03oldDMwLT", Traits<decltype(tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byMediumIsolationMVArun2v1DBdR03oldDMwLT"), &(tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT[i]), Form("%s%d_%s/%s", tstr, i, "byMediumIsolationMVArun2v1DBdR03oldDMwLT", Traits<decltype(tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byTightIsolationMVArun2v1DBdR03oldDMwLT"), &(tau_byTightIsolationMVArun2v1DBdR03oldDMwLT[i]), Form("%s%d_%s/%s", tstr, i, "byTightIsolationMVArun2v1DBdR03oldDMwLT", Traits<decltype(tau_byTightIsolationMVArun2v1DBdR03oldDMwLT)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "byVTightIsolationMVArun2v1DBdR03oldDMwLT"), &(tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT[i]), Form("%s%d_%s/%s", tstr, i, "byVTightIsolationMVArun2v1DBdR03oldDMwLT", Traits<decltype(tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstMuonLoose3"), &(tau_againstMuonLoose3[i]), Form("%s%d_%s/%s", tstr, i, "againstMuonLoose3", Traits<decltype(tau_againstMuonLoose3)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstMuonTight3"), &(tau_againstMuonTight3[i]), Form("%s%d_%s/%s", tstr, i, "againstMuonTight3", Traits<decltype(tau_againstMuonTight3)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstElectronVLooseMVA6"), &(tau_againstElectronVLooseMVA6[i]), Form("%s%d_%s/%s", tstr, i, "againstElectronVLooseMVA6", Traits<decltype(tau_againstElectronVLooseMVA6)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstElectronLooseMVA6"), &(tau_againstElectronLooseMVA6[i]), Form("%s%d_%s/%s", tstr, i, "againstElectronLooseMVA6", Traits<decltype(tau_againstElectronLooseMVA6)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstElectronMediumMVA6"), &(tau_againstElectronMediumMVA6[i]), Form("%s%d_%s/%s", tstr, i, "againstElectronMediumMVA6", Traits<decltype(tau_againstElectronMediumMVA6)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstElectronTightMVA6"), &(tau_againstElectronTightMVA6[i]), Form("%s%d_%s/%s", tstr, i, "againstElectronTightMVA6", Traits<decltype(tau_againstElectronTightMVA6)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", tstr, i, "againstElectronVTightMVA6"), &(tau_againstElectronVTightMVA6[i]), Form("%s%d_%s/%s", tstr, i, "againstElectronVTightMVA6", Traits<decltype(tau_againstElectronVTightMVA6)>::TYPE_NAME));
-    }
+    floatMap[FloatVariableType::mT_met_lep1],              "mT_lep1",
+    floatMap[FloatVariableType::mT_met_lep2],              "mT_lep2",
+    floatMap[FloatVariableType::mT_met_lep3],              "mT_lep3",
+    floatMap[FloatVariableType::mT_met_lep4],              "mT_lep4",
+    floatMap[FloatVariableType::massL],                    "massL",
 
-    for(Int_t i = 0; i < nof_jets; ++i)
-    {
-      outputTree -> Branch(Form("%s%d_%s", jstr, i, "pt"), &(jet_pt[i]), Form("%s%d_%s/%s", jstr, i, "pt", Traits<decltype(jet_pt)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", jstr, i, "eta"), &(jet_eta[i]), Form("%s%d_%s/%s", jstr, i, "eta", Traits<decltype(jet_eta)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", jstr, i, "phi"), &(jet_phi[i]), Form("%s%d_%s/%s", jstr, i, "phi", Traits<decltype(jet_phi)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", jstr, i, "E"), &(jet_E[i]), Form("%s%d_%s/%s", jstr, i, "E", Traits<decltype(jet_E)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", jstr, i, "CSV"), &(jet_CSV[i]), Form("%s%d_%s/%s", jstr, i, "CSV", Traits<decltype(jet_CSV)>::TYPE_NAME));
-      outputTree -> Branch(Form("%s%d_%s", jstr, i, "heppyFlavour"), &(jet_heppyFlavour[i]), Form("%s%d_%s/%s", jstr, i, "heppyFlavour", Traits<decltype(jet_heppyFlavour)>::TYPE_NAME));
-    }
+    floatMap[FloatVariableType::mTauTauVis],               "mTauTauVis",
+    floatMap[FloatVariableType::mvis_l1tau],               "mTauTauVis1",
+    floatMap[FloatVariableType::mvis_l2tau],               "mTauTauVis2",
 
-    outputTree -> Branch("PFMET", &(PFMET), Form("PFMET/%s", Traits<decltype(PFMET)>::TYPE_NAME));
-    outputTree -> Branch("PFMETphi", &(PFMETphi), Form("PFMETphi/%s", Traits<decltype(PFMETphi)>::TYPE_NAME));
-    outputTree -> Branch("MHT", &(MHT), Form("MHT/%s", Traits<decltype(MHT)>::TYPE_NAME));
-    outputTree -> Branch("metLD", &(metLD), Form("metLD/%s", Traits<decltype(metLD)>::TYPE_NAME));
+    floatMap[FloatVariableType::mbb],                      "mbb",
+    floatMap[FloatVariableType::mbb_loose],                "mbb_loose",
 
-    outputTree -> Branch("lep0_conept", &(lep0_conept), Form("lep0_conept/%s", Traits<decltype(lep0_conept)>::TYPE_NAME));
-    outputTree -> Branch("lep1_conept", &(lep1_conept), Form("lep1_conept/%s", Traits<decltype(lep1_conept)>::TYPE_NAME));
-    outputTree -> Branch("mindr_lep0_jet", &(mindr_lep0_jet), Form("mindr_lep0_jet/%s", Traits<decltype(mindr_lep0_jet)>::TYPE_NAME));
-    outputTree -> Branch("mindr_lep1_jet", &(mindr_lep1_jet), Form("mindr_lep1_jet/%s", Traits<decltype(mindr_lep1_jet)>::TYPE_NAME));
-    outputTree -> Branch("MT_met_lep0", &(MT_met_lep0), Form("MT_met_lep0/%s", Traits<decltype(MT_met_lep0)>::TYPE_NAME));
-    outputTree -> Branch("avg_dr_jet", &(avg_dr_jet), Form("avg_dr_jet/%s", Traits<decltype(avg_dr_jet)>::TYPE_NAME));
-    outputTree -> Branch("n_jet25_recl", &(n_jet25_recl), Form("n_jet25_recl/%s", Traits<decltype(n_jet25_recl)>::TYPE_NAME));
-    outputTree -> Branch("MVA_2lss_ttV", &(MVA_2lss_ttV), Form("MVA_2lss_ttV/%s", Traits<decltype(MVA_2lss_ttV)>::TYPE_NAME));
-    outputTree -> Branch("MVA_2lss_ttbar", &(MVA_2lss_ttbar), Form("MVA_2lss_ttbar/%s", Traits<decltype(MVA_2lss_ttbar)>::TYPE_NAME));
-    
-    outputTree -> Branch("MC_weight", &(MC_weight), Form("MC_weight/%s", Traits<decltype(MC_weight)>::TYPE_NAME));
-    outputTree -> Branch("FR_weight", &(FR_weight), Form("FR_weight/%s", Traits<decltype(FR_weight)>::TYPE_NAME));
-    outputTree -> Branch("triggerSF_weight", &(triggerSF_weight), Form("triggerSF_weight/%s", Traits<decltype(triggerSF_weight)>::TYPE_NAME));
-    outputTree -> Branch("leptonSF_weight", &(leptonSF_weight), Form("leptonSF_weight/%s", Traits<decltype(leptonSF_weight)>::TYPE_NAME));
-    outputTree -> Branch("bTagSF_weight", &(bTagSF_weight), Form("bTagSF_weight/%s", Traits<decltype(bTagSF_weight)>::TYPE_NAME));
-    outputTree -> Branch("PU_weight", &(PU_weight), Form("PU_weight/%s", Traits<decltype(PU_weight)>::TYPE_NAME));
-    outputTree -> Branch("tauSF_weight", &(hadTauSF_weight), Form("tauSF_weight/%s", Traits<decltype(hadTauSF_weight)>::TYPE_NAME));
-    outputTree -> Branch("genWeight", &(genWeight), Form("genWeight/%s", Traits<decltype(genWeight)>::TYPE_NAME));
-    outputTree -> Branch("lumiScale", &(lumiScale), Form("lumiScale/%s", Traits<decltype(lumiScale)>::TYPE_NAME));
-    
-    reset(true);
-  }
-  else
-    std::cerr << "SyncNtuple:WARNING:Should initialize the instance only once!\n";
+    floatMap[FloatVariableType::cosThetaS_hadTau],         "cosThetaS_hadTau",
+    floatMap[FloatVariableType::HTT],                      "HTT",
+    floatMap[FloatVariableType::HadTop_pt],                "HadTop_pt",
+    floatMap[FloatVariableType::Hj_tagger],                "Hj_tagger",
+
+//--- boosted variables
+    floatMap[FloatVariableType::HadTop_pt_semi_boosted_fromAK8], "HadTop_pt_semi_boosted_fromAK8",
+    floatMap[FloatVariableType::HTT_semi_boosted_fromAK8],       "HTT_semi_boosted_fromAK8",
+    floatMap[FloatVariableType::minDR_AK8_Lep],                  "minDR_AK8_Lep",
+
+    ntags,                                                 "nBJetMedium",
+    ntags_loose,                                           "nBJetLoose",
+    njets_light,                                           "nLightJet",
+    njets_cleanedFromAK8,                                  "cleanedJets_fromAK8",
+
+//--- Additional event-level MVA output variables
+    floatMap[FloatVariableType::mvaOutput_plainKin_ttV],   "mvaOutput_plainKin_ttV",
+    floatMap[FloatVariableType::mvaOutput_plainKin_tt],    "mvaOutput_plainKin_ttbar",
+
+    floatMap[FloatVariableType::mvaOutput_HTT_SUM_VT],     "mvaOutput_1l_2tau_HTT_SUM_VT",
+
+    floatMap[FloatVariableType::mvaOutput_plainKin_1B_VT],  "mvaOutput_2l_2tau_plainKin_1B_VT",
+    floatMap[FloatVariableType::mvaOutput_plainKin_SUM_VT], "mvaOutput_2l_2tau_plainKin_SUM_VT",
+
+    floatMap[FloatVariableType::mvaOutput_2lss_ttV],                 "mvaOutput_2lss_ttV",
+    floatMap[FloatVariableType::mvaOutput_2lss_tt],                  "mvaOutput_2lss_ttbar",
+    floatMap[FloatVariableType::mvaOutput_2lss_1tau_plainKin_tt],    "mvaOutput_2lss_1tau_plainKin_ttbar",
+    floatMap[FloatVariableType::mvaOutput_2lss_1tau_plainKin_ttV],   "mvaOutput_2lss_1tau_plainKin_ttV",
+    floatMap[FloatVariableType::mvaOutput_2lss_1tau_plainKin_1B_M],  "mvaOutput_2lss_1tau_plainKin_1B_M",
+    floatMap[FloatVariableType::mvaOutput_2lss_1tau_plainKin_SUM_M], "mvaOutput_2lss_1tau_plainKin_SUM_M",
+    floatMap[FloatVariableType::mvaOutput_2lss_1tau_HTT_SUM_M],      "mvaOutput_2lss_1tau_HTT_SUM_M",
+    floatMap[FloatVariableType::mvaOutput_2lss_1tau_HTTMEM_SUM_M],   "mvaOutput_2lss_1tau_HTTMEM_SUM_M",
+
+    floatMap[FloatVariableType::mvaOutput_3l_ttV],         "mvaOutput_3l_ttV",
+    floatMap[FloatVariableType::mvaOutput_3l_ttbar],       "mvaOutput_3l_ttbar",
+    floatMap[FloatVariableType::mvaOutput_plainKin_SUM_M], "mvaOutput_3l_1tau_plainKin_SUM_M",
+    floatMap[FloatVariableType::mvaOutput_plainKin_1B_M],  "mvaOutput_3l_1tau_plainKin_1B_M",
+
+    floatMap[FloatVariableType::mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_ttH], "mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_ttH",
+    floatMap[FloatVariableType::mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_tH], "mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_tH",
+    floatMap[FloatVariableType::mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_ttW], "mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_ttW",
+    floatMap[FloatVariableType::mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_rest], "mvaOutput_2lss_ttH_tH_4cat_onlyTHQ_v4_rest",
+
+    floatMap[FloatVariableType::mvaOutput_3l_ttH_tH_3cat_v8_ttH], "mvaOutput_3l_ttH_tH_3cat_v8_ttH",
+    floatMap[FloatVariableType::mvaOutput_3l_ttH_tH_3cat_v8_tH], "mvaOutput_3l_ttH_tH_3cat_v8_tH",
+    floatMap[FloatVariableType::mvaOutput_3l_ttH_tH_3cat_v8_rest], "mvaOutput_3l_ttH_tH_3cat_v8_rest",
+
+//--- Event weights
+    floatMap[FloatVariableType::FR_weight],                "FR_weight",
+    floatMap[FloatVariableType::triggerSF_weight],         "triggerSF_weight",
+    floatMap[FloatVariableType::leptonSF_weight],          "leptonSF_weight",
+    floatMap[FloatVariableType::tauSF_weight],             "tauSF_weight",
+    floatMap[FloatVariableType::bTagSF_weight],            "bTagSF_weight",
+    floatMap[FloatVariableType::PU_weight],                "PU_weight",
+    floatMap[FloatVariableType::MC_weight],                "MC_weight",
+
+//--- MEM variables
+    floatMap[FloatVariableType::Integral_ttH],             "Integral_ttH",
+    floatMap[FloatVariableType::Integral_ttZ],             "Integral_ttZ",
+    floatMap[FloatVariableType::Integral_ttZ_Zll],         "Integral_ttZ_Zll",
+    floatMap[FloatVariableType::Integral_ttbar],           "Integral_ttbar",
+    floatMap[FloatVariableType::integration_type],         "integration_type",
+    floatMap[FloatVariableType::MEM_LR],                   "memOutput_LR",
+
+//--- custom additional branches (not necessary in sync)
+    floatMap[FloatVariableType::genWeight],                "genWeight"
+  );
+
+  setBranches(
+    lstr, nof_leps,
+    lep_pt,            "pt",
+    lep_conePt,        "conePt",
+    lep_eta,           "eta",
+    lep_phi,           "phi",
+    lep_pdgId,         "pdgId",
+    lep_isfakeablesel, "isfakeablesel",
+    lep_ismvasel,      "ismvasel"
+  );
+
+  setBranches(
+    mstr, nof_mus,
+    mu_pt,                   "pt",
+    mu_conept,               "conept",
+    mu_eta,                  "eta",
+    mu_phi,                  "phi",
+    mu_E,                    "E",
+    mu_charge,               "charge",
+    mu_miniRelIso,           "miniRelIso",
+    mu_miniRelIsoCharged,    "miniIsoCharged",
+    mu_miniRelIsoNeutral,    "miniIsoNeutral",
+    mu_pfRelIso04All,        "PFRelIso04",
+    mu_jetNDauChargedMVASel, "jetNDauChargedMVASel",
+    mu_jetPtRel,             "jetPtRel",
+    mu_jetPtRatio,           "jetPtRatio",
+    mu_jetCSV,               "jetCSV",
+    mu_jetDeepCSV,           "jetDeepCSV",
+    mu_jetDeepJet,           "jetDeepJet",
+    mu_sip3D,                "sip3D",
+    mu_dxy,                  "dxy",
+    mu_dxyAbs,               "dxyAbs",
+    mu_dz,                   "dz",
+    mu_segmentCompatibility, "segmentCompatibility",
+    mu_leptonMVA,            "leptonMVA",
+    mu_mediumID,             "mediumID",
+    mu_dpt_div_pt,           "dpt_div_pt",
+    mu_isfakeablesel,        "isfakeablesel",
+    mu_ismvasel,             "ismvasel",
+    mu_isGenMatched,         "isGenMatched"
+  );
+
+  setBranches(
+    estr, nof_eles,
+    ele_pt,                   "pt",
+    ele_conept,               "conept",
+    ele_eta,                  "eta",
+    ele_phi,                  "phi",
+    ele_E,                    "E",
+    ele_charge,               "charge",
+    ele_miniRelIso,           "miniRelIso",
+    ele_miniRelIsoCharged,    "miniIsoCharged",
+    ele_miniRelIsoNeutral,    "miniIsoNeutral",
+    ele_pfRelIso04All,        "PFRelIso04",
+    ele_jetNDauChargedMVASel, "jetNDauChargedMVASel",
+    ele_jetPtRel,             "jetPtRel",
+    ele_jetPtRatio,           "jetPtRatio",
+    ele_jetCSV,               "jetCSV",
+    ele_jetDeepCSV,           "jetDeepCSV",
+    ele_jetDeepJet,           "jetDeepJet",
+    ele_sip3D,                "sip3D",
+    ele_dxyAbs,               "dxyAbs",
+    ele_dxy,                  "dxy",
+    ele_dz,                   "dz",
+    ele_ntMVAeleID,           "ntMVAeleID",
+    ele_leptonMVA,            "leptonMVA",
+    ele_isChargeConsistent,   "isChargeConsistent",
+    ele_passesConversionVeto, "passesConversionVeto",
+    ele_nMissingHits,         "nMissingHits",
+    ele_sigmaEtaEta,          "sigmaEtaEta",
+    ele_HoE,                  "HoE",
+    ele_deltaEta,             "deltaEta",
+    ele_deltaPhi,             "deltaPhi",
+    ele_OoEminusOoP,          "OoEminusOoP",
+    ele_isfakeablesel,        "isfakeablesel",
+    ele_ismvasel,             "ismvasel",
+    ele_isGenMatched,         "isGenMatched"
+  );
+
+  setBranches(
+    tstr, nof_taus,
+    tau_pt,                                        "pt",
+    tau_eta,                                       "eta",
+    tau_phi,                                       "phi",
+    tau_E,                                         "E",
+    tau_charge,                                    "charge",
+    tau_dxy,                                       "dxy",
+    tau_dz,                                        "dz",
+    tau_decayMode,                                 "decayMode",
+    tau_decayModeFindingOldDMs,                    "decayModeFindingOldDMs",
+    tau_decayModeFindingNewDMs,                    "decayModeFindingNewDMs",
+    tau_byVVLooseIsolationMVArun2v1DBdR03oldDMwLT, "byVVLooseIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_byVLooseIsolationMVArun2v1DBdR03oldDMwLT,  "byVLooseIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT,   "byLooseIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT,  "byMediumIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_byTightIsolationMVArun2v1DBdR03oldDMwLT,   "byTightIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT,  "byVTightIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_byVVTightIsolationMVArun2v1DBdR03oldDMwLT, "byVVTightIsolationMVArun2v1DBdR03oldDMwLT",
+    tau_rawMVArun2v1DBdR03oldDMwLT,                "rawMVArun2v1DBdR03oldDMwLT",
+    tau_byVVVLooseDeepTau2017v2VSjet,              "byVVVLooseDeepTau2017v2VSjet",
+    tau_byVVLooseDeepTau2017v2VSjet,               "byVVLooseDeepTau2017v2VSjet",
+    tau_byVLooseDeepTau2017v2VSjet,                "byVLooseDeepTau2017v2VSjet",
+    tau_byLooseDeepTau2017v2VSjet,                 "byLooseDeepTau2017v2VSjet",
+    tau_byMediumDeepTau2017v2VSjet,                "byMediumDeepTau2017v2VSjet",
+    tau_byTightDeepTau2017v2VSjet,                 "byTightDeepTau2017v2VSjet",
+    tau_byVTightDeepTau2017v2VSjet,                "byVTightDeepTau2017v2VSjet",
+    tau_byVVTightDeepTau2017v2VSjet,               "byVVTightDeepTau2017v2VSjet",
+    tau_byDeepTau2017v2VSjetraw,                   "byDeepTau2017v2VSjetraw",
+    tau_againstMuonLoose3,                         "againstMuonLoose3",
+    tau_againstMuonTight3,                         "againstMuonTight3",
+    tau_againstElectronVLooseMVA6,                 "againstElectronVLooseMVA6",
+    tau_againstElectronLooseMVA6,                  "againstElectronLooseMVA6",
+    tau_againstElectronMediumMVA6,                 "againstElectronMediumMVA6",
+    tau_againstElectronTightMVA6,                  "againstElectronTightMVA6",
+    tau_againstElectronVTightMVA6,                 "againstElectronVTightMVA6",
+    tau_isGenMatched,                              "isGenMatched"
+  );
+
+  setBranches(
+    jstr, nof_jets,
+    jet_pt,      "pt",
+    jet_eta,     "eta",
+    jet_phi,     "phi",
+    jet_E,       "E",
+    jet_CSV,     "CSV",
+    jet_DeepCSV, "DeepCSV",
+    jet_DeepJet, "DeepJet",
+    jet_QGdiscr, "QGdiscr"
+  );
+
+  setBranches(
+    jfstr, nof_fwdJets,
+    jetFwd_pt,  "pt",
+    jetFwd_eta, "eta",
+    jetFwd_phi, "phi",
+    jetFwd_E,   "E"
+  );
+
+  setBranches(
+    jak8str, nof_jetAK8,
+    jetAK8_pt,  "pt",
+    jetAK8_eta, "eta",
+    jetAK8_phi, "phi",
+    jetAK8_E,   "E",
+    jetAK8_tau1,         "tau1",
+    jetAK8_tau2,         "tau2",
+    jetAK8_SDmass,       "SDmass",
+    jetAK8_subjet_1_pt,  "subjet_1_pt",
+    jetAK8_subjet_1_eta, "subjet_1_eta",
+    jetAK8_subjet_1_phi, "subjet_1_phi",
+    jetAK8_subjet_2_pt,  "subjet_2_pt",
+    jetAK8_subjet_2_eta, "subjet_2_eta",
+    jetAK8_subjet_2_phi, "subjet_2_phi"
+  );
+
+  resetBranches();
 }
 
 void
 SyncNtupleManager::initializeHLTBranches(const std::vector<std::vector<hltPath *>> & hltPaths)
 {
   for(const auto & hltVector: hltPaths)
+  {
     for(const auto & hlt: hltVector)
+    {
       hltMap[hlt -> getBranchName()] = -1;
+    }
+  }
   for(auto & kv: hltMap)
-    outputTree -> Branch(hltMangle(kv.first).c_str(), &(hltMap[kv.first]),
-                         Form("%s/%s", hltMangle(kv.first).c_str(), Traits<decltype(kv.second)>::TYPE_NAME));
+  {
+    setBranches(hltMap[kv.first], kv.first);
+  }
 }
 
 void
-SyncNtupleManager::readRunLumiEvent(UInt_t run_,
-                                    UInt_t lumi_,
-                                    ULong64_t event_)
+SyncNtupleManager::read(const EventInfo & eventInfo)
 {
-  nEvent = event_;
-  ls = lumi_;
-  run = run_;
+  run = eventInfo.run;
+  ls = eventInfo.lumi;
+  nEvent = eventInfo.event;
 }
 
 void
-SyncNtupleManager::read(std::vector<const RecoMuon *> & muons,
-                        std::vector<const RecoMuon *> & fakeable_muons,
-                        std::vector<const RecoMuon *> & cutbased_muons,
-                        std::vector<const RecoMuon *> & mvabased_muons)
+SyncNtupleManager::read(const std::vector<const RecoLepton *> & leptons)
+{
+  n_sel_lep = leptons.size();
+  const Int_t nof_iterations = std::min(n_sel_lep, nof_leps);
+  for(Int_t i = 0; i < nof_iterations; ++i)
+  {
+    const RecoLepton * lepton = leptons[i];
+    lep_pt[i] = lepton->pt();
+    lep_conePt[i] = lepton->cone_pt();
+    lep_eta[i] = lepton->eta();
+    lep_phi[i] = lepton->phi();
+    lep_pdgId[i] = lepton->pdgId();
+    lep_isfakeablesel[i] = lepton->isFakeable();
+    lep_ismvasel[i] = lepton->isTight();
+  }
+}
+
+void
+SyncNtupleManager::read(const std::vector<const RecoMuon *> & muons,
+                        const std::vector<const RecoMuon *> & fakeable_muons,
+                        const std::vector<const RecoMuon *> & tight_muons)
 {
   n_presel_mu = muons.size();
   n_fakeablesel_mu = fakeable_muons.size();
-  n_cutsel_mu = cutbased_muons.size();
-  n_mvasel_mu = mvabased_muons.size();
+  n_mvasel_mu = tight_muons.size();
+
   const Int_t nof_iterations = std::min(n_presel_mu, nof_mus);
   for(Int_t i = 0; i < nof_iterations; ++i)
   {
     const RecoMuon * const muon = muons[i];
     mu_pt[i] = muon -> pt();
+    mu_conept[i] = muon -> cone_pt();
     mu_eta[i] = muon -> eta();
     mu_phi[i] = muon -> phi();
     mu_E[i] = (muon -> p4()).E();
     mu_charge[i] = muon -> charge();
     mu_miniRelIso[i] = muon -> relIso();
-    mu_miniIsoCharged[i] = muon -> miniIsoCharged();
-    mu_miniIsoNeutral[i] = muon -> miniIsoNeutral();
+    mu_miniRelIsoCharged[i] = muon -> miniRelIsoCharged();
+    mu_miniRelIsoNeutral[i] = muon -> miniRelIsoNeutral();
+    mu_pfRelIso04All[i] = muon -> pfRelIso04All();
     mu_jetNDauChargedMVASel[i] = muon -> jetNDauChargedMVASel();
     mu_jetPtRel[i] = muon -> jetPtRel();
-    mu_jetPtRatio[i] = muon -> jetPtRatio();
-    mu_jetCSV[i] = muon -> jetBtagCSV();
+    mu_jetPtRatio[i] = std::min(muon -> jetPtRatio(), 1.5);
+    mu_jetCSV[i] = std::max(0., muon -> jetBtagCSV(Btag::kCSVv2));
+    mu_jetDeepCSV[i] = std::max(0., muon -> jetBtagCSV(Btag::kDeepCSV));
+    mu_jetDeepJet[i] = std::max(0., muon -> jetBtagCSV(Btag::kDeepJet));
     mu_sip3D[i] = muon -> sip3d();
+    mu_dxyAbs[i] = std::fabs(muon -> dxy());
     mu_dxy[i] = muon -> dxy();
     mu_dz[i] = muon -> dz();
     mu_segmentCompatibility[i] = muon -> segmentCompatibility();
     mu_leptonMVA[i] = muon -> mvaRawTTH();
-    mu_conept[i] = comp_lep1_conePt(*muon);
     mu_mediumID[i] = muon -> passesMediumIdPOG();
-#ifdef DPT_DIV_PT
     mu_dpt_div_pt[i] = muon -> dpt_div_pt();
-#endif
+
     mu_isfakeablesel[i] = 0;
     for(const auto & fakeable_muon: fakeable_muons)
+    {
       if(muon == fakeable_muon)
       {
         mu_isfakeablesel[i] = 1;
         break;
       }
-    mu_iscutsel[i] = 0;
-    for(const auto & cutbased_muon: cutbased_muons)
-      if(muon == cutbased_muon)
-      {
-        mu_iscutsel[i] = 1;
-        break;
-      }
+    }
     mu_ismvasel[i] = 0;
-    for(const auto & mvabased_muon: mvabased_muons)
-      if(muon == mvabased_muon)
+    for(const auto & tight_muon: tight_muons)
+    {
+      if(muon == tight_muon)
       {
         mu_ismvasel[i] = 1;
         break;
       }
+    }
+
+    mu_isGenMatched[i] = muon -> isGenMatched(genMatchCharge_leptons);
   }
 }
 
 void
-SyncNtupleManager::read(std::vector<const RecoElectron *> & electrons,
-                        std::vector<const RecoElectron *> & fakeable_electrons,
-                        std::vector<const RecoElectron *> & cutbased_electrons,
-                        std::vector<const RecoElectron *> & mvabased_electrons)
+SyncNtupleManager::read(const std::vector<const RecoElectron *> & electrons,
+                        const std::vector<const RecoElectron *> & fakeable_electrons,
+                        const std::vector<const RecoElectron *> & tight_electrons)
 {
   n_presel_ele = electrons.size();
   n_fakeablesel_ele = fakeable_electrons.size();
-  n_cutsel_ele = cutbased_electrons.size();
-  n_mvasel_ele = mvabased_electrons.size();
+  n_mvasel_ele = tight_electrons.size();
+
   const Int_t nof_iterations = std::min(n_presel_ele, nof_eles);
   for(Int_t i = 0; i < nof_iterations; ++i)
   {
     const RecoElectron * const electron = electrons[i];
     ele_pt[i] = electron -> pt();
+    ele_conept[i] = electron -> cone_pt();
     ele_eta[i] = electron -> eta();
     ele_phi[i] = electron -> phi();
     ele_E[i] = (electron -> p4()).E();
     ele_charge[i] = electron -> charge();
     ele_miniRelIso[i] = electron -> relIso();
-    ele_miniIsoCharged[i] = electron -> miniIsoCharged();
-    ele_miniIsoNeutral[i] = electron -> miniIsoNeutral();
+    ele_miniRelIsoCharged[i] = electron -> miniRelIsoCharged();
+    ele_miniRelIsoNeutral[i] = electron -> miniRelIsoNeutral();
+    ele_pfRelIso04All[i] = electron -> pfRelIso04All();
     ele_jetNDauChargedMVASel[i] = electron -> jetNDauChargedMVASel();
     ele_jetPtRel[i] = electron -> jetPtRel();
-    ele_jetPtRatio[i] = electron -> jetPtRatio();
-    ele_jetCSV[i] = electron -> jetBtagCSV();
+    ele_jetPtRatio[i] = std::min(electron -> jetPtRatio(), 1.5);
+    ele_jetCSV[i] = std::max(0., electron -> jetBtagCSV(Btag::kCSVv2));
+    ele_jetDeepCSV[i] = std::max(0., electron -> jetBtagCSV(Btag::kDeepCSV));
+    ele_jetDeepJet[i] = std::max(0., electron -> jetBtagCSV(Btag::kDeepJet));
     ele_sip3D[i] = electron -> sip3d();
+    ele_dxyAbs[i] = std::fabs(electron -> dxy());
     ele_dxy[i] = electron -> dxy();
     ele_dz[i] = electron -> dz();
-    ele_ntMVAeleID[i] = electron -> mvaRawPOG_HZZ();
+    ele_ntMVAeleID[i] = electron -> mvaRaw_POG();
     ele_leptonMVA[i] = electron -> mvaRawTTH();
-    ele_conept[i] = comp_lep1_conePt(*electron);
     ele_isChargeConsistent[i] = electron -> tightCharge() == 2 ? 1 : 0;
     ele_passesConversionVeto[i] = electron -> passesConversionVeto();
     ele_nMissingHits[i] = electron -> nLostHits();
+    ele_sigmaEtaEta[i] = electron -> sigmaEtaEta();
+    ele_HoE[i] = electron -> HoE();
+    ele_deltaEta[i] = electron -> deltaEta();
+    ele_deltaPhi[i] = electron -> deltaPhi();
+    ele_OoEminusOoP[i] = electron -> OoEminusOoP();
+
     ele_isfakeablesel[i] = 0;
     for(const auto & fakeable_electron: fakeable_electrons)
+    {
       if(electron == fakeable_electron)
       {
         ele_isfakeablesel[i] = 1;
         break;
       }
-    ele_iscutsel[i] = 0;
-    for(const auto & cutbased_electron: cutbased_electrons)
-      if(electron == cutbased_electron)
-      {
-        ele_iscutsel[i] = 1;
-        break;
-      }
+    }
     ele_ismvasel[i] = 0;
-    for(const auto & mvabased_electron: mvabased_electrons)
-      if(electron == mvabased_electron)
+    for(const auto & tight_electron: tight_electrons)
+    {
+      if(electron == tight_electron)
       {
         ele_ismvasel[i] = 1;
         break;
       }
+    }
+
+    ele_isGenMatched[i] = electron -> isGenMatched(genMatchCharge_leptons);
   }
 }
 
 void
-SyncNtupleManager::read(std::vector<const RecoHadTau *> & hadtaus)
+SyncNtupleManager::read(const std::vector<const RecoHadTau *> & hadtaus)
 {
   n_presel_tau = hadtaus.size();
   const Int_t nof_iterations = std::min(n_presel_tau, nof_taus);
@@ -427,25 +554,30 @@ SyncNtupleManager::read(std::vector<const RecoHadTau *> & hadtaus)
     tau_charge[i] = hadtau -> charge();
     tau_dxy[i] = hadtau -> dxy();
     tau_dz[i] = hadtau -> dz();
-    tau_decayModeFindingOldDMs[i] = hadtau -> decayModeFinding();
-    tau_decayModeFindingNewDMs[i] = hadtau -> decayModeFindingNew();
-    tau_byCombinedIsolationDeltaBetaCorr3Hits[i] = hadtau -> raw_cut_dR05();
+    tau_decayMode[i] = hadtau -> decayMode();
+    tau_decayModeFindingOldDMs[i] = hadtau -> idDecayMode();
+    tau_decayModeFindingNewDMs[i] = true; // all taus pass new DM
 
-    const Int_t idCI3hit = hadtau -> id_cut_dR05();
-    tau_byLooseCombinedIsolationDeltaBetaCorr3Hits[i] = idCI3hit >= 1 ? 1 : 0;
-    tau_byMediumCombinedIsolationDeltaBetaCorr3Hits[i] = idCI3hit >= 2 ? 1 : 0;
-    tau_byTightCombinedIsolationDeltaBetaCorr3Hits[i] = idCI3hit >= 3 ? 1 : 0;
-
-    const Int_t idCI3hitdR03 = hadtau -> id_cut_dR03();
-    tau_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03[i] = idCI3hitdR03 >= 1 ? 1 : 0;
-    tau_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03[i] = idCI3hitdR03 >= 2 ? 1 : 0;
-    tau_byTightCombinedIsolationDeltaBetaCorr3HitsdR03[i] = idCI3hitdR03 >= 3 ? 1 : 0;
-
-    const Int_t idMVArun2dR03 = hadtau -> id_mva_dR03();
+    const Int_t idMVArun2dR03 = hadtau -> id_mva(TauID::MVAoldDMdR032017v2);
+    tau_byVVLooseIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 1 ? 1 : 0;
+    tau_byVLooseIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 2 ? 1 : 0;
     tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 3 ? 1 : 0;
     tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 4 ? 1 : 0;
     tau_byTightIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 5 ? 1 : 0;
     tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 6 ? 1 : 0;
+    tau_byVVTightIsolationMVArun2v1DBdR03oldDMwLT[i] = idMVArun2dR03 >= 7 ? 1 : 0;
+    tau_rawMVArun2v1DBdR03oldDMwLT[i] = hadtau -> raw_mva(TauID::MVAoldDMdR032017v2);
+
+    const Int_t idDeepTauVSjet = hadtau -> id_mva(TauID::DeepTau2017v2VSjet);
+    tau_byVVVLooseDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 1 ? 1 : 0;
+    tau_byVVLooseDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 2 ? 1 : 0;
+    tau_byVLooseDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 3 ? 1 : 0;
+    tau_byLooseDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 4 ? 1 : 0;
+    tau_byMediumDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 5 ? 1 : 0;
+    tau_byTightDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 6 ? 1 : 0;
+    tau_byVTightDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 7 ? 1 : 0;
+    tau_byVVTightDeepTau2017v2VSjet[i] = idDeepTauVSjet >= 8 ? 1 : 0;
+    tau_byDeepTau2017v2VSjetraw[i] = hadtau -> raw_mva(TauID::DeepTau2017v2VSjet);
 
     const Int_t idAntiMu = hadtau -> antiMuon();
     tau_againstMuonLoose3[i] = idAntiMu >= 1 ? 1 : 0;
@@ -457,236 +589,299 @@ SyncNtupleManager::read(std::vector<const RecoHadTau *> & hadtaus)
     tau_againstElectronMediumMVA6[i] = idAntiErun2 >= 3 ? 1 : 0;
     tau_againstElectronTightMVA6[i] = idAntiErun2 >= 4 ? 1 : 0;
     tau_againstElectronVTightMVA6[i] = idAntiErun2 >= 5 ? 1 : 0;
+    tau_isGenMatched[i] = hadtau -> isGenMatched(genMatchCharge_taus);
   }
 }
 
 void
-SyncNtupleManager::read(std::vector<const RecoJet *> & jets)
+SyncNtupleManager::read(const std::vector<const RecoJet *> & jets,
+                        bool isFwd)
 {
-  n_presel_jet = jets.size();
-  const Int_t nof_iterations = std::min(n_presel_jet, nof_jets);
+  if(isFwd)
+  {
+    n_presel_fwdJet = jets.size();
+    const Int_t nof_iterations = std::min(n_presel_fwdJet, nof_fwdJets);
+    for(Int_t i = 0; i < nof_iterations; ++i)
+    {
+      const RecoJet * const jet = jets[i];
+      jetFwd_pt[i] = jet -> pt();
+      jetFwd_eta[i] = jet -> eta();
+      jetFwd_phi[i] = jet -> phi();
+      jetFwd_E[i] = (jet -> p4()).E();
+    }
+  }
+  else
+  {
+    n_presel_jet = jets.size();
+    const Int_t nof_iterations = std::min(n_presel_jet, nof_jets);
+    for(Int_t i = 0; i < nof_iterations; ++i)
+    {
+      const RecoJet * const jet = jets[i];
+      jet_pt[i] = jet -> pt();
+      jet_eta[i] = jet -> eta();
+      jet_phi[i] = jet -> phi();
+      jet_E[i] = (jet -> p4()).E();
+      if(jet -> hasBtag(Btag::kCSVv2))
+      {
+        jet_CSV[i] = jet -> BtagCSV(Btag::kCSVv2);
+      }
+      if(jet -> hasBtag(Btag::kDeepCSV))
+      {
+        jet_DeepCSV[i] = jet -> BtagCSV(Btag::kDeepCSV);
+      }
+      jet_DeepJet[i] = jet -> BtagCSV(Btag::kDeepJet);
+      jet_QGdiscr[i] = jet -> QGDiscr();
+    }
+  }
+}
+
+void
+SyncNtupleManager::read(const std::vector<const RecoJetAK8 *> & jets)
+{
+  n_presel_jetAK8 = jets.size();
+  const Int_t nof_iterations = std::min(n_presel_jetAK8, nof_jetAK8);
   for(Int_t i = 0; i < nof_iterations; ++i)
   {
-    const RecoJet * const jet = jets[i];
-    jet_pt[i] = jet -> pt();
-    jet_eta[i] = jet -> eta();
-    jet_phi[i] = jet -> phi();
-    jet_E[i] = (jet -> p4()).E();
-    jet_CSV[i] = jet -> BtagCSV();
-    jet_heppyFlavour[i] = jet -> heppyFlavour();
+    const RecoJetAK8 * const jet = jets[i];
+    jetAK8_pt[i] = jet -> pt();
+    jetAK8_eta[i] = jet -> eta();
+    jetAK8_phi[i] = jet -> phi();
+    jetAK8_E[i] = (jet -> p4()).E();
+    jetAK8_tau1[i] = jet -> tau1();
+    jetAK8_tau2[i] = jet -> tau2();
+    jetAK8_SDmass[i] = jet -> msoftdrop();
+    Particle::LorentzVector subJet1 = (jet -> subJet1()) ->p4();
+    Particle::LorentzVector subJet2 = (jet -> subJet2()) -> p4();
+    jetAK8_subjet_1_pt[i] = subJet1.pt();
+    jetAK8_subjet_1_eta[i] = subJet1.eta();
+    jetAK8_subjet_1_phi[i] = subJet1.phi();
+    jetAK8_subjet_2_pt[i] = subJet2.pt();
+    jetAK8_subjet_2_eta[i] = subJet2.eta();
+    jetAK8_subjet_2_phi[i] = subJet2.phi();
   }
-}
-
-void
-SyncNtupleManager::read(const std::map<std::string, Double_t> & mvaInputs)
-{
-  if(mvaInputs.find("LepGood_conePt[iF_Recl[0]]") != mvaInputs.end()) lep0_conept    = static_cast<decltype(lep0_conept)>   (mvaInputs.at("LepGood_conePt[iF_Recl[0]]"));
-  if(mvaInputs.find("LepGood_conePt[iF_Recl[1]]") != mvaInputs.end()) lep1_conept    = static_cast<decltype(lep1_conept)>   (mvaInputs.at("LepGood_conePt[iF_Recl[1]]"));
-  if(mvaInputs.find("mindr_lep1_jet")             != mvaInputs.end()) mindr_lep0_jet = static_cast<decltype(mindr_lep0_jet)>(mvaInputs.at("mindr_lep1_jet"));
-  if(mvaInputs.find("mindr_lep2_jet")             != mvaInputs.end()) mindr_lep1_jet = static_cast<decltype(mindr_lep1_jet)>(mvaInputs.at("mindr_lep2_jet"));
-  if(mvaInputs.find("MT_met_lep1")                != mvaInputs.end()) MT_met_lep0    = static_cast<decltype(MT_met_lep0)>   (mvaInputs.at("MT_met_lep1"));
-  if(mvaInputs.find("avg_dr_jet")                 != mvaInputs.end()) avg_dr_jet     = static_cast<decltype(avg_dr_jet)>    (mvaInputs.at("avg_dr_jet"));
-  if(mvaInputs.find("nJet25_Recl")                != mvaInputs.end()) n_jet25_recl   = static_cast<decltype(n_jet25_recl)>  (mvaInputs.at("nJet25_Recl"));
 }
 
 void
 SyncNtupleManager::read(Float_t value,
                         FloatVariableType type)
 {
-  if     (type == FloatVariableType::PFMET)           PFMET          = value;
-  else if(type == FloatVariableType::PFMETphi)        PFMETphi       = value;
-  else if(type == FloatVariableType::MHT)             MHT            = value;
-  else if(type == FloatVariableType::metLD)           metLD          = value;
-  else if(type == FloatVariableType::mvaOutput_ttV)   MVA_2lss_ttV   = value;
-  else if(type == FloatVariableType::mvaOutput_ttbar) MVA_2lss_ttbar = value;
-  else if(type == FloatVariableType::MC_weight)        MC_weight         = value;
-  else if(type == FloatVariableType::FR_weight)        FR_weight         = value;
-  else if(type == FloatVariableType::triggerSF_weight) triggerSF_weight  = value;
-  else if(type == FloatVariableType::leptonSF_weight)  leptonSF_weight   = value;
-  else if(type == FloatVariableType::bTagSF_weight)    bTagSF_weight     = value;
-  else if(type == FloatVariableType::PU_weight)        PU_weight         = value;
-  else if(type == FloatVariableType::hadTauSF_weight)  hadTauSF_weight   = value;
-  else if(type == FloatVariableType::genWeight)       genWeight      = value;
-  else if(type == FloatVariableType::lumiScale)       lumiScale      = value;
+  floatMap[type] = value;
 }
 
 void
 SyncNtupleManager::read(const std::vector<std::vector<hltPath *>> & hltPaths)
 {
   for(const auto & hltVector: hltPaths)
+  {
     for(const auto & hlt: hltVector)
+    {
       hltMap[hlt -> getBranchName()] = hlt -> getValue();
+    }
+  }
 }
 
 void
-SyncNtupleManager::reset(bool is_initializing)
+SyncNtupleManager::read(bool is_genMatched,
+                        int n_tags,
+                        int n_tags_loose,
+                        int n_jets_light,
+                        int n_jets_cleanedFromAK8,
+                        bool b_is_like_tH_not_ttH)
+{
+  isGenMatched         = is_genMatched;
+  ntags                = n_tags;
+  ntags_loose          = n_tags_loose;
+  njets_light          = n_jets_light;
+  njets_cleanedFromAK8 = n_jets_cleanedFromAK8;
+  is_like_tH_not_ttH   = b_is_like_tH_not_ttH;
+}
+
+void
+SyncNtupleManager::resetBranches()
 {
   nEvent = 0;
   ls = 0;
   run = 0;
 
-  const Int_t nof_mu_iterations = is_initializing ? nof_mus : std::min(n_presel_mu, nof_mus);
-  for(Int_t i = 0; i < nof_mu_iterations; ++i)
+  reset(
+    n_presel_mu,
+    n_fakeablesel_mu,
+    n_mvasel_mu,
+    n_presel_ele,
+    n_fakeablesel_ele,
+    n_mvasel_ele,
+    n_presel_tau,
+    n_presel_jet,
+    n_presel_fwdJet,
+    isGenMatched,
+    ntags,
+    ntags_loose,
+    njets_light,
+    njets_cleanedFromAK8,
+    is_like_tH_not_ttH
+  );
+
+  for(auto & kv: floatMap)
   {
-    mu_pt[i] = placeholder_value;
-    mu_eta[i] = placeholder_value;
-    mu_phi[i] = placeholder_value;
-    mu_E[i] = placeholder_value;
-    mu_charge[i] = placeholder_value;
-    mu_miniRelIso[i] = placeholder_value;
-    mu_miniIsoCharged[i] = placeholder_value;
-    mu_miniIsoNeutral[i] = placeholder_value;
-    mu_jetNDauChargedMVASel[i] = placeholder_value;
-    mu_jetPtRel[i] = placeholder_value;
-    mu_jetPtRatio[i] = placeholder_value;
-    mu_jetCSV[i] = placeholder_value;
-    mu_sip3D[i] = placeholder_value;
-    mu_dxy[i] = placeholder_value;
-    mu_dz[i] = placeholder_value;
-    mu_segmentCompatibility[i] = placeholder_value;
-    mu_leptonMVA[i] = placeholder_value;
-    mu_conept[i] = placeholder_value;
-    mu_mediumID[i] = placeholder_value;
-#ifdef DPT_DIV_PT
-    mu_dpt_div_pt[i] = placeholder_value;
-#endif
-    mu_isfakeablesel[i] = placeholder_value;
-    mu_iscutsel[i] = placeholder_value;
-    mu_ismvasel[i] = placeholder_value;
+    kv.second = placeholder_value;
   }
-  n_presel_mu = placeholder_value;
-  n_fakeablesel_mu = placeholder_value;
-  n_cutsel_mu = placeholder_value;
-  n_mvasel_mu = placeholder_value;
 
-  const Int_t nof_ele_iterations = is_initializing ? nof_eles : std::min(n_presel_ele, nof_eles);
-  for(Int_t i = 0; i < nof_ele_iterations; ++i)
-  {
-    ele_pt[i] = placeholder_value;
-    ele_eta[i] = placeholder_value;
-    ele_phi[i] = placeholder_value;
-    ele_E[i] = placeholder_value;
-    ele_charge[i] = placeholder_value;
-    ele_miniRelIso[i] = placeholder_value;
-    ele_miniIsoCharged[i] = placeholder_value;
-    ele_miniIsoNeutral[i] = placeholder_value;
-    ele_jetNDauChargedMVASel[i] = placeholder_value;
-    ele_jetPtRel[i] = placeholder_value;
-    ele_jetPtRatio[i] = placeholder_value;
-    ele_jetCSV[i] = placeholder_value;
-    ele_sip3D[i] = placeholder_value;
-    ele_dxy[i] = placeholder_value;
-    ele_dz[i] = placeholder_value;
-    ele_ntMVAeleID[i] = placeholder_value;
-    ele_leptonMVA[i] = placeholder_value;
-    ele_conept[i] = placeholder_value;
-    ele_isChargeConsistent[i] = placeholder_value;
-    ele_passesConversionVeto[i] = placeholder_value;
-    ele_nMissingHits[i] = placeholder_value;
-    ele_isfakeablesel[i] = placeholder_value;
-    ele_iscutsel[i] = placeholder_value;
-    ele_ismvasel[i] = placeholder_value;
-  }
-  n_presel_ele = placeholder_value;
-  n_fakeablesel_ele = placeholder_value;
-  n_cutsel_ele = placeholder_value;
-  n_mvasel_ele = placeholder_value;
+  reset(
+    nof_leps,
+    lep_pt,
+    lep_eta,
+    lep_phi,
+    lep_pdgId,
+    lep_isfakeablesel,
+    lep_ismvasel
+  );
 
-  const Int_t nof_tau_iterations = is_initializing ? nof_taus : std::min(n_presel_tau, nof_taus);
-  for(Int_t i = 0; i < nof_tau_iterations; ++i)
-  {
-    tau_pt[i] = placeholder_value;
-    tau_eta[i] = placeholder_value;
-    tau_phi[i] = placeholder_value;
-    tau_E[i] = placeholder_value;
-    tau_charge[i] = placeholder_value;
-    tau_dxy[i] = placeholder_value;
-    tau_dz[i] = placeholder_value;
-    tau_decayModeFindingOldDMs[i] = placeholder_value;
-    tau_decayModeFindingNewDMs[i] = placeholder_value;
-    tau_byCombinedIsolationDeltaBetaCorr3Hits[i] = placeholder_value;
-    tau_byLooseCombinedIsolationDeltaBetaCorr3Hits[i] = placeholder_value;
-    tau_byMediumCombinedIsolationDeltaBetaCorr3Hits[i] = placeholder_value;
-    tau_byTightCombinedIsolationDeltaBetaCorr3Hits[i] = placeholder_value;
-    tau_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03[i] = placeholder_value;
-    tau_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03[i] = placeholder_value;
-    tau_byTightCombinedIsolationDeltaBetaCorr3HitsdR03[i] = placeholder_value;
-    tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT[i] = placeholder_value;
-    tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT[i] = placeholder_value;
-    tau_byTightIsolationMVArun2v1DBdR03oldDMwLT[i] = placeholder_value;
-    tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT[i] = placeholder_value;
-    tau_againstMuonLoose3[i] = placeholder_value;
-    tau_againstMuonTight3[i] = placeholder_value;
-    tau_againstElectronVLooseMVA6[i] = placeholder_value;
-    tau_againstElectronLooseMVA6[i] = placeholder_value;
-    tau_againstElectronMediumMVA6[i] = placeholder_value;
-    tau_againstElectronTightMVA6[i] = placeholder_value;
-    tau_againstElectronVTightMVA6[i] = placeholder_value;
-  }
-  n_presel_tau = placeholder_value;
+  reset(
+    nof_mus,
+    mu_pt,
+    mu_conept,
+    mu_eta,
+    mu_phi,
+    mu_E,
+    mu_charge,
+    mu_miniRelIso,
+    mu_miniRelIsoCharged,
+    mu_miniRelIsoNeutral,
+    mu_pfRelIso04All,
+    mu_jetNDauChargedMVASel,
+    mu_jetPtRel,
+    mu_jetPtRatio,
+    mu_jetCSV,
+    mu_jetDeepCSV,
+    mu_jetDeepJet,
+    mu_sip3D,
+    mu_dxy,
+    mu_dxyAbs,
+    mu_dz,
+    mu_segmentCompatibility,
+    mu_leptonMVA,
+    mu_mediumID,
+    mu_dpt_div_pt,
+    mu_isfakeablesel,
+    mu_ismvasel,
+    mu_isGenMatched
+  );
 
-  const Int_t nof_jet_iterations = is_initializing ? nof_jets : std::min(n_presel_jet, nof_jets);
-  for(Int_t i = 0; i < nof_jet_iterations; ++i)
-  {
-    jet_pt[i] = placeholder_value;
-    jet_eta[i] = placeholder_value;
-    jet_phi[i] = placeholder_value;
-    jet_E[i] = placeholder_value;
-    jet_CSV[i] = placeholder_value;
-    jet_heppyFlavour[i] = placeholder_value;
-  }
-  n_presel_jet = placeholder_value;
+  reset(
+    nof_eles,
+    ele_pt,
+    ele_conept,
+    ele_eta,
+    ele_phi,
+    ele_E,
+    ele_charge,
+    ele_miniRelIso,
+    ele_miniRelIsoCharged,
+    ele_miniRelIsoNeutral,
+    ele_pfRelIso04All,
+    ele_jetNDauChargedMVASel,
+    ele_jetPtRel,
+    ele_jetPtRatio,
+    ele_jetCSV,
+    ele_jetDeepCSV,
+    ele_jetDeepJet,
+    ele_sip3D,
+    ele_dxy,
+    ele_dxyAbs,
+    ele_dz,
+    ele_ntMVAeleID,
+    ele_leptonMVA,
+    ele_isChargeConsistent,
+    ele_passesConversionVeto,
+    ele_nMissingHits,
+    ele_sigmaEtaEta,
+    ele_HoE,
+    ele_deltaEta,
+    ele_deltaPhi,
+    ele_OoEminusOoP,
+    ele_isfakeablesel,
+    ele_ismvasel,
+    ele_isGenMatched
+  );
 
-  PFMET = placeholder_value;
-  PFMETphi = placeholder_value;
-  MHT = placeholder_value;
-  metLD = placeholder_value;
+  reset(
+    nof_taus,
+    tau_pt,
+    tau_eta,
+    tau_phi,
+    tau_E,
+    tau_charge,
+    tau_dxy,
+    tau_dz,
+    tau_decayMode,
+    tau_decayModeFindingOldDMs,
+    tau_decayModeFindingNewDMs,
+    tau_byVVLooseIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_byVLooseIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_byLooseIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_byMediumIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_byTightIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_byVTightIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_byVVTightIsolationMVArun2v1DBdR03oldDMwLT,
+    tau_rawMVArun2v1DBdR03oldDMwLT,
+    tau_byVVVLooseDeepTau2017v2VSjet,
+    tau_byVVLooseDeepTau2017v2VSjet,
+    tau_byVLooseDeepTau2017v2VSjet,
+    tau_byLooseDeepTau2017v2VSjet,
+    tau_byMediumDeepTau2017v2VSjet,
+    tau_byTightDeepTau2017v2VSjet,
+    tau_byVTightDeepTau2017v2VSjet,
+    tau_byVVTightDeepTau2017v2VSjet,
+    tau_byDeepTau2017v2VSjetraw,
+    tau_againstMuonLoose3,
+    tau_againstMuonTight3,
+    tau_againstElectronVLooseMVA6,
+    tau_againstElectronLooseMVA6,
+    tau_againstElectronMediumMVA6,
+    tau_againstElectronTightMVA6,
+    tau_againstElectronVTightMVA6,
+    tau_isGenMatched
+  );
 
-  lep0_conept = placeholder_value;
-  lep1_conept = placeholder_value;
-  mindr_lep0_jet = placeholder_value;
-  mindr_lep1_jet = placeholder_value;
-  MT_met_lep0 = placeholder_value;
-  avg_dr_jet = placeholder_value;
-  n_jet25_recl = placeholder_value;
-  MVA_2lss_ttV = placeholder_value;
-  MVA_2lss_ttbar = placeholder_value;
+  reset(
+    nof_jets,
+    jet_pt,
+    jet_eta,
+    jet_phi,
+    jet_E,
+    jet_CSV,
+    jet_DeepCSV,
+    jet_DeepJet,
+    jet_QGdiscr
+  );
 
-  MC_weight         = placeholder_value;
-  FR_weight         = placeholder_value;
-  triggerSF_weight  = placeholder_value;
-  leptonSF_weight   = placeholder_value;
-  bTagSF_weight     = placeholder_value;
-  PU_weight         = placeholder_value;
-  hadTauSF_weight   = placeholder_value;
-  genWeight         = placeholder_value;
-  lumiScale         = placeholder_value;
+  reset(
+    nof_fwdJets,
+    jetFwd_pt,
+    jetFwd_eta,
+    jetFwd_phi,
+    jetFwd_E
+  );
+
+  reset(
+    nof_jetAK8,
+    jetAK8_pt,
+    jetAK8_eta,
+    jetAK8_phi,
+    jetAK8_E,
+    jetAK8_tau1,
+    jetAK8_tau2,
+    jetAK8_SDmass,
+    jetAK8_subjet_1_pt,
+    jetAK8_subjet_1_eta,
+    jetAK8_subjet_1_phi,
+    jetAK8_subjet_2_pt,
+    jetAK8_subjet_2_eta,
+    jetAK8_subjet_2_phi
+  );
 
   for(auto & kv: hltMap)
+  {
     hltMap[kv.first] = -1;
+  }
 }
-
-std::string
-SyncNtupleManager::hltMangle(const std::string & hltBranchName) const
-{
-  if(! boost::starts_with(hltBranchName, "HLT_BIT_HLT"))
-    throw cms::Exception("sync_ntuple") << "Invalid HLT branch name: "
-                                        << hltBranchName;
-  return hltBranchName.substr(8);
-}
-
-void
-SyncNtupleManager::fill()
-{
-  outputTree -> Fill();
-  reset(false);
-}
-
-void
-SyncNtupleManager::write()
-{
-  outputFile -> cd();
-  outputTree -> Write();
-}
-
-

@@ -1,37 +1,44 @@
 #ifndef tthAnalysis_HiggsToTauTau_GenParticleWriter_h
 #define tthAnalysis_HiggsToTauTau_GenParticleWriter_h
 
-#include "tthAnalysis/HiggsToTauTau/interface/GenLepton.h" // GenLepton
+#include "tthAnalysis/HiggsToTauTau/interface/GenParticle.h" // GenParticle
 
-#include <Rtypes.h> // Int_t, Double_t
-#include <TTree.h> // TTree
+#include <string> // std::string
+#include <vector> // std::vector<>
 
-#include <string>
-#include <vector>
+// forward declaration
+class TTree;
 
 class GenParticleWriter
 {
- public:
-  GenParticleWriter(const std::string& branchName_num, const std::string& branchName_obj);
+public:
+  GenParticleWriter(const std::string & branchName_obj,
+                    unsigned int max_nParticles = 36);
+  GenParticleWriter(const std::string & branchName_num,
+                    const std::string & branchName_obj,
+                    unsigned int max_nParticles = 36);
   ~GenParticleWriter();
 
   /**
    * @brief Call tree->Branch for all GenParticle branches
    */
-  void setBranches(TTree* tree);
+  void
+  setBranches(TTree * tree);
 
   /**
    * @brief Write collection of GenParticle objects to tree
    */
-  void write(const std::vector<GenLepton>& particles);
-  
- protected: 
- /**
-   * @brief Initialize names of branches to be read from tree
-   */
-  void setBranchNames();
+  void
+  write(const std::vector<GenParticle> & particles);
 
-  const int max_nParticles_;
+protected:
+ /**
+   * @brief Initialize names of branches to be written to tree
+   */
+  void
+  setBranchNames();
+
+  const unsigned int max_nParticles_;
   std::string branchName_num_;
   std::string branchName_obj_;
 
@@ -40,13 +47,21 @@ class GenParticleWriter
   std::string branchName_phi_;
   std::string branchName_mass_;
   std::string branchName_pdgId_;
+  std::string branchName_charge_;
+  std::string branchName_status_;
+  std::string branchName_statusFlags_;
+  std::string branchName_genPartFlav_;
 
-  Int_t nParticles_;
-  Float_t* particle_pt_;
-  Float_t* particle_eta_;
-  Float_t* particle_phi_;
-  Float_t* particle_mass_;
-  Int_t* particle_pdgId_;
+  UInt_t nParticles_;
+  Float_t * particle_pt_;
+  Float_t * particle_eta_;
+  Float_t * particle_phi_;
+  Float_t * particle_mass_;
+  Int_t * particle_pdgId_;
+  Int_t * particle_charge_;
+  Int_t * particle_status_;
+  Int_t * particle_statusFlags_;
+  UChar_t * particle_genPartFlav_;
 };
 
 #endif // tthAnalysis_HiggsToTauTau_GenParticleWriter_h

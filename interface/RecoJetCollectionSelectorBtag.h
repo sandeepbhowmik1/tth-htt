@@ -1,46 +1,52 @@
 #ifndef tthAnalysis_HiggsToTauTau_RecoJetCollectionSelectorBtag_h
 #define tthAnalysis_HiggsToTauTau_RecoJetCollectionSelectorBtag_h
 
-#include "tthAnalysis/HiggsToTauTau/interface/RecoJet.h" // RecoJet
 #include "tthAnalysis/HiggsToTauTau/interface/ParticleCollectionSelector.h" // ParticleCollectionSelector
-#include "tthAnalysis/HiggsToTauTau/interface/analysisAuxFunctions.h" // kEra_2015, kEra_2016
-
-#include <Rtypes.h> // Int_t, Double_t
-
-#include <string>
-#include <map>
+#include "tthAnalysis/HiggsToTauTau/interface/RecoJet.h" // RecoJet
 
 class RecoJetSelectorBtag
 {
- public:
-  explicit RecoJetSelectorBtag(int era, int index, bool debug);
-  ~RecoJetSelectorBtag() {}
+public:
+  explicit RecoJetSelectorBtag(int era,
+                               int index,
+                               bool debug);
 
   /**
-   * @brief Check if jet given as function argument passes pT and eta cuts (pT > 25 GeV and |eta| < 2.4, cf. Section 3.1 of AN-2015/321)
+   * @brief Set cut thresholds
+   */
+  void set_min_pt(double min_pt);
+  void set_max_absEta(double max_absEta);
+  void set_min_jetId(int min_jetId);
+
+  /**
+   * @brief Get cut thresholds
+   */
+  double get_min_pt() const;
+  double get_max_absEta() const;
+  int get_min_jetId() const;
+
+  /**
+   * @brief Check if jet given as function argument passes pT and eta cuts
+   *        (pT > 25 GeV and |eta| < 2.4, cf. Section 3.1 of AN-2015/321)
    * @return True if jet passes selection; false otherwise
    */
-  bool operator()(const RecoJet& jet) const;
+  bool
+  operator()(const RecoJet & jet) const;
 
- protected: 
+protected:
   int era_;
   bool debug_;
   Double_t min_pt_;      ///< lower cut threshold on pT
   Double_t max_absEta_;  ///< upper cut threshold on absolute value of eta
-  Double_t min_BtagCSV_; ///< lower cut threshold on CSV b-tagging discriminator value    
+  Int_t min_jetId_;      ///< lower cut threshold on jet ID value
+  Double_t min_BtagCSV_; ///< lower cut threshold on CSV b-tagging discriminator value
 };
 
-class RecoJetSelectorBtagLoose 
+class RecoJetSelectorBtagLoose
   : public RecoJetSelectorBtag
 {
- public:
-  explicit RecoJetSelectorBtagLoose(int era, int index = -1, bool debug = false)
-    : RecoJetSelectorBtag(era, index, debug) 
-  {
-    if      ( era_ == kEra_2015 ) min_BtagCSV_ = 0.460;  // CSV loose WP, cf. https://twiki.cern.ch/twiki/bin/viewauth/CMS/BtagRecommendation76X#Supported_Algorithms_and_Operati
-    else if ( era_ == kEra_2016 ) min_BtagCSV_ = 0.5426; // CSV loose WP, cf. https://twiki.cern.ch/twiki/bin/viewauth/CMS/BtagRecommendation80XReReco
-    else assert(0);
-  }
+public:
+  explicit RecoJetSelectorBtagLoose(int era, int index = -1, bool debug = false);
 };
 
 typedef ParticleCollectionSelector<RecoJet, RecoJetSelectorBtagLoose> RecoJetCollectionSelectorBtagLoose;
@@ -48,14 +54,8 @@ typedef ParticleCollectionSelector<RecoJet, RecoJetSelectorBtagLoose> RecoJetCol
 class RecoJetSelectorBtagMedium 
   : public RecoJetSelectorBtag
 {
- public:
-  explicit RecoJetSelectorBtagMedium(int era, int index = -1, bool debug = false)
-    : RecoJetSelectorBtag(era, index, debug)
-  {
-    if      ( era_ == kEra_2015 ) min_BtagCSV_ = 0.800;  // CSV medium WP, cf. https://twiki.cern.ch/twiki/bin/viewauth/CMS/BtagRecommendation76X#Supported_Algorithms_and_Operati
-    else if ( era_ == kEra_2016 ) min_BtagCSV_ = 0.8484; // CSV medium WP, cf. https://twiki.cern.ch/twiki/bin/viewauth/CMS/BtagRecommendation80XReReco
-    else assert(0);
-  }
+public:
+  explicit RecoJetSelectorBtagMedium(int era, int index = -1, bool debug = false);
 };
 
 typedef ParticleCollectionSelector<RecoJet, RecoJetSelectorBtagMedium> RecoJetCollectionSelectorBtagMedium;

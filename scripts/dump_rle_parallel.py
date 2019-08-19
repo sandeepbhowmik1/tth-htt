@@ -1,7 +1,18 @@
 #!/usr/bin/env python
 
-import logging, argparse, os, sys, getpass, jinja2, subprocess, stat, re, io, ROOT
-from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_2016 import samples_2016 as samples
+from tthAnalysis.HiggsToTauTau.samples.tthAnalyzeSamples_2017 import samples_2017 as samples
+from tthAnalysis.HiggsToTauTau.safe_root import ROOT
+from tthAnalysis.HiggsToTauTau.common import logging, SmartFormatter
+
+import argparse
+import os
+import sys
+import getpass
+import jinja2
+import subprocess
+import stat
+import re
+import io
 
 dumPy = """#!/usr/bin/env python
 
@@ -17,16 +28,16 @@ def get_rle(input_rootfile, output_textfile_remote, output_textfile_local):
   if not os.path.isdir(os.path.dirname(output_textfile_remote)):
     os.makedirs(os.path.dirname(output_textfile_remote))
   with open(output_textfile_remote, 'w') as f:
-    ch_root = ROOT.TChain("tree")
+    ch_root = ROOT.TChain("{{ tree }}")
     ch_root.AddFile(input_rootfile)
 
     run_a  = array.array('I', [0])
     lumi_a = array.array('I', [0])
     evt_a  = array.array('L', [0])
 
-    ch_root.SetBranchAddress("run",  run_a)
-    ch_root.SetBranchAddress("lumi", lumi_a)
-    ch_root.SetBranchAddress("evt",  evt_a)
+    ch_root.SetBranchAddress("{{ run }}",  run_a)
+    ch_root.SetBranchAddress("{{ lumi }}", lumi_a)
+    ch_root.SetBranchAddress("{{ event }}",  evt_a)
 
     nof_entries = ch_root.GetEntries()
     rle_i_arr = []
@@ -99,15 +110,19 @@ def raw_linecount(filename, buf_sz = 2**20):
       buf    = read_f(buf_sz)
   return lines
 
-def bake_job(sh_script_path, py_script_path, sh_args, py_args, logfile, submit_job = True):
+def bake_job(sh_script_path, rle_branchNames, treeName, py_script_path, sh_args, py_args, logfile,
+             submit_job = True):
   '''Bakes a sbatch job for us
   Args:
-    sh_script_path: string, path to the bash script
-    py_script_path: string, path to the python script
-    sh_args: string. path to the scratch directory
-    py_args: zip, arguments to python script
-    logfile, string, path to sbatch log file
-    submit_job: bool, if True, submit the jobs (default); if False, create the scripts only
+    sh_script_path:  string,                   Path to the bash script
+    rle_branchNames: dict { string : string }, Branch names of run, lumi and event
+    treeName:        string,                   Name of the TTree
+    py_script_path:  string,                   Path to the python script
+    sh_args:         string,                   Path to the scratch directory
+    py_args:         zip,                      Arguments to python script
+    logfile,         string,                   Path to sbatch log file
+    submit_job:      bool,                     If True, submit the jobs (default);
+                                               if False, create the scripts only
 
   Returns:
     None
@@ -126,11 +141,15 @@ def bake_job(sh_script_path, py_script_path, sh_args, py_args, logfile, submit_j
   with open(py_script_path, 'w') as py_script:
     py_script.write(jinja2.Template(dumPy).render(
       input_list = py_args,
+      run        = rle_branchNames['run'],
+      lumi       = rle_branchNames['lumi'],
+      event      = rle_branchNames['event'],
+      tree       = treeName,
     ))
   chmod_x(py_script_path)
 
   if submit_job:
-    submit_cmd = "sbatch --partition=short --output={logfile} {bash_script}".format(
+    submit_cmd = "sbatch --mem=1800M --partition=short --output={logfile} {bash_script}".format(
       logfile = logfile,
       bash_script = sh_script_path,
     )
@@ -145,15 +164,19 @@ def bake_job(sh_script_path, py_script_path, sh_args, py_args, logfile, submit_j
     logging.debug("Submitted the job")
     return int(submit_out.split()[-1])
 
-def dump_rle_parallel(output_dir, nof_files = 100, force = False, test = False, verbose = False, sample = '', tmp_dir = ''):
+def dump_rle_parallel(output_dir, rle_branchNames, treeName, nof_files = 100, force = False,
+                      test = False, verbose = False, sample = '', tmp_dir = ''):
   '''Dumps RLE numbers ,,in parallel''
   Args:
-    output_dir: string, Path to the directory where the RLE files will be stored
-    nof_files:  int,    Number of files to be processed by one sbatch jobs
-    force:      bool,   If True, creates `output_dir` if it's not there
-    test:       bool,   If True, create jobs scripts but do not submit them to SLURM
-    verbose:    bool,   If True, prints lots of information to standard output
-    sample:     string, (optional) sample name; if the sample name is not specified, all samples will be processed
+    output_dir:      string, Path to the directory where the RLE files will be stored
+    rle_branchNames: dict { string : string }, Specifies the run, lumi and event branch names
+    treeName:        string,                   Name of the TTree
+    nof_files:       int,                      Number of files to be processed by one sbatch jobs
+    force:           bool,                     If True, creates `output_dir` if it's not there
+    test:            bool,                     If True, create jobs scripts but do not submit them to SLURM
+    verbose:         bool,                     If True, prints lots of information to standard output
+    sample:          string,                   (optional) sample name; if the sample name is not specified,
+                                               all samples will be processed
 
   Returns:
     int array, List of sbatch job IDs that were submitted to SLURM
@@ -233,7 +256,8 @@ def dump_rle_parallel(output_dir, nof_files = 100, force = False, test = False, 
           log_path = os.path.join(output_dir_tmp_log, "{i}.log".format(i = jobId))
           scratch_job_dir = os.path.join(os.path.join(scratch_dir, str(jobId)))
           sbatch_job_id = bake_job(
-            sh_path, py_path, scratch_job_dir, zip(root_files, remote_output, local_output), log_path, not test
+            sh_path, rle_branchNames, treeName, py_path, scratch_job_dir,
+            zip(root_files, remote_output, local_output), log_path, not test,
           )
           if sbatch_job_id:
             sbatch_job_ids.append(sbatch_job_id)
@@ -251,7 +275,8 @@ def dump_rle_parallel(output_dir, nof_files = 100, force = False, test = False, 
     log_path = os.path.join(output_dir_tmp_log, "{i}.log".format(i = jobId))
     scratch_job_dir = os.path.join(os.path.join(scratch_dir, str(jobId)))
     sbatch_job_id = bake_job(
-      sh_path, py_path, scratch_job_dir, zip(root_files, remote_output, local_output), log_path, not test
+      sh_path, rle_branchNames, treeName, py_path, scratch_job_dir,
+      zip(root_files, remote_output, local_output), log_path, not test,
     )
     if sbatch_job_id:
       sbatch_job_ids.append(sbatch_job_id)
@@ -316,7 +341,7 @@ def validate(output_dir, verbose = False):
             if not root_file_regex_match:
               continue
 
-            root_file_idx = sample_subpath_idx * 1000 + int(root_file_regex_match.group(1))
+            root_file_idx = int(root_file_regex_match.group(1))
             expected_rle_file_basename = '{root_file_idx}.txt'.format(root_file_idx = root_file_idx)
             expected_rle_file          = os.path.join(sample_dir, expected_rle_file_basename)
             file_dict_entry            = (expected_rle_file, sample_file_fullpath)
@@ -388,18 +413,6 @@ def validate(output_dir, verbose = False):
   return
 
 if __name__ == '__main__':
-  logging.basicConfig(
-    stream = sys.stdout,
-    level  = logging.INFO,
-    format = '%(asctime)s - %(levelname)s: %(message)s'
-  )
-
-  class SmartFormatter(argparse.HelpFormatter):
-    def _split_lines(self, text, width):
-      if text.startswith('R|'):
-        return text[2:].splitlines()
-      return argparse.HelpFormatter._split_lines(self, text, width)
-
   parser = argparse.ArgumentParser(formatter_class = lambda prog: SmartFormatter(prog, max_help_position = 40))
   parser.add_argument('-o', '--output-dir', metavar = 'directory', required = False, type = str, default = '',
                       help = 'R|Directory where the list of RLE numbers will be saved')
@@ -413,13 +426,30 @@ if __name__ == '__main__':
                       help = 'R|Force the creation of output directory if missing')
   parser.add_argument('-t', '--test', dest = 'test', action = 'store_true', default = False,
                       help = 'R|Do not submit the jobs')
+  parser.add_argument('-r', '--run', metavar = 'name', required = False, type = str, default = 'run',
+                      help = 'R|Name of the run branch')
+  parser.add_argument('-l', '--lumi', metavar = 'name', required = False, type = str, default = 'luminosityBlock',
+                      help = 'R|Name of the lumi branch')
+  parser.add_argument('-e', '--event', metavar = 'name', required = False, type = str, default = 'event',
+                      help = 'R|Name of the event branch')
+  parser.add_argument('-y', '--tree', metavar = 'name', required = False, type = str, default = 'Events',
+                      help = 'R|Name of the TTree')
   parser.add_argument('-V', '--validate', dest = 'validate', action = 'store_true', default = False,
                       help = 'R|Check if all the RLE numbers have been fetched')
   parser.add_argument('-v', '--verbose', dest = 'verbose', action = 'store_true', default = False,
                       help = 'R|Enable verbose printout')
   args = parser.parse_args()
 
+  rle_branchNames = {
+    'run'   : args.run,
+    'lumi'  : args.lumi,
+    'event' : args.event,
+  }
+
   if args.validate:
     validate(args.output_dir, args.verbose)
   else:
-    dump_rle_parallel(args.output_dir, args.nof_files, args.force, args.test, args.verbose, args.sample_name, args.tmp_dir)
+    dump_rle_parallel(
+      args.output_dir, rle_branchNames, args.tree, args.nof_files, args.force, args.test,
+      args.verbose, args.sample_name, args.tmp_dir,
+    )

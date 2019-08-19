@@ -1,24 +1,31 @@
 #include "tthAnalysis/HiggsToTauTau/interface/LHEInfoReader.h" // LHEInfoReader
 
-#include "FWCore/Utilities/interface/Exception.h"
+#include "tthAnalysis/HiggsToTauTau/interface/cmsException.h" // cmsException()
+#include "tthAnalysis/HiggsToTauTau/interface/BranchAddressInitializer.h" // BranchAddressInitializer, TTree, Form()
+#include "tthAnalysis/HiggsToTauTau/interface/sysUncertOptions.h" // kLHE_scale_*
 
-#include <assert.h> // assert
+#include <cassert> // assert()
+#include <iostream> // std::cerr
 
 std::map<std::string, int> LHEInfoReader::numInstances_;
 std::map<std::string, LHEInfoReader*> LHEInfoReader::instances_;
 
-LHEInfoReader::LHEInfoReader()
-  : max_scale_nWeights_(6)
-  , branchName_scale_nWeights_("nLHE_weights_scale")
-  , branchName_scale_weights_("LHE_weights_scale_wgt")
-  , branchName_scale_ids_("LHE_weights_scale_id")
+LHEInfoReader::LHEInfoReader(bool has_LHE_weights)
+  : max_scale_nWeights_(9)
+  , branchName_scale_nWeights_("nLHEScaleWeight")
+  , branchName_scale_weights_("LHEScaleWeight")
   , max_pdf_nWeights_(103)
-  , branchName_pdf_nWeights_("nLHE_weights_pdf")
-  , branchName_pdf_weights_("LHE_weights_pdf_wgt")
+  , branchName_pdf_nWeights_("nLHEPdfWeight")
+  , branchName_pdf_weights_("LHEPdfWeight")
+  , scale_nWeights_(0)
+  , scale_weights_(nullptr)
+  , pdf_nWeights_(0)
+  , pdf_weights_(nullptr)
   , weight_scale_xUp_(1.)
   , weight_scale_xDown_(1.)
   , weight_scale_yUp_(1.)
   , weight_scale_yDown_(1.)
+  , has_LHE_weights_(has_LHE_weights)
 {
   setBranchNames();
 }
@@ -27,108 +34,194 @@ LHEInfoReader::~LHEInfoReader()
 {
   --numInstances_[branchName_scale_weights_];
   assert(numInstances_[branchName_scale_weights_] >= 0);
-  if ( numInstances_[branchName_scale_weights_] == 0 ) {
-    LHEInfoReader* gInstance = instances_[branchName_scale_weights_];
+
+  if(numInstances_[branchName_scale_weights_] == 0)
+  {
+    LHEInfoReader * const gInstance = instances_[branchName_scale_weights_];
     assert(gInstance);
     delete[] gInstance->scale_weights_;
-    delete[] gInstance->scale_ids_;
     delete[] gInstance->pdf_weights_;
-    instances_[branchName_scale_weights_] = 0;
+    instances_[branchName_scale_weights_] = nullptr;
   }
 }
 
-void LHEInfoReader::setBranchNames()
+void
+LHEInfoReader::setBranchNames()
 {
-  if ( numInstances_[branchName_scale_weights_] == 0 ) {
+  if(numInstances_[branchName_scale_weights_] == 0)
+  {
     instances_[branchName_scale_weights_] = this;
-  } else {
-    LHEInfoReader* gInstance = instances_[branchName_scale_weights_];
-    if ( branchName_scale_nWeights_ != gInstance->branchName_scale_nWeights_ ||
-	 branchName_scale_ids_      != gInstance->branchName_scale_ids_      ||
-	 branchName_pdf_nWeights_   != gInstance->branchName_pdf_nWeights_   ||
-         branchName_pdf_weights_    != gInstance->branchName_pdf_weights_    ) {
-      throw cms::Exception("LHEInfoReader") 
-	<< "Association between configuration parameters 'branchName_scale_weights' and 'branchName_pdf_weights' must be unique:"
-	<< " present association 'branchName_scale_weights' = " << branchName_scale_weights_ << " with 'branchName_pdf_weights' = " << branchName_pdf_weights_ 
-	<< " does not match previous association 'branchName_scale_weights' = " << gInstance->branchName_scale_weights_ << " with 'branchName_pdf_weights' = " << gInstance->branchName_pdf_weights_ << " !!\n";
+  }
+  else if(has_LHE_weights_)
+  {
+    const LHEInfoReader * const gInstance = instances_[branchName_scale_weights_];
+    if(branchName_scale_nWeights_ != gInstance->branchName_scale_nWeights_ ||
+       branchName_pdf_nWeights_   != gInstance->branchName_pdf_nWeights_   ||
+       branchName_pdf_weights_    != gInstance->branchName_pdf_weights_     )
+    {
+      throw cmsException(this)
+        << "Association between configuration parameters 'branchName_scale_weights' and 'branchName_pdf_weights'"
+           " must be unique: present association 'branchName_scale_weights' = " << branchName_scale_weights_
+        << " with 'branchName_pdf_weights' = " << branchName_pdf_weights_
+        << " does not match previous association 'branchName_scale_weights' = " << gInstance->branchName_scale_weights_
+        << " with 'branchName_pdf_weights' = " << gInstance->branchName_pdf_weights_ << " !!\n";
     }
   }
   ++numInstances_[branchName_scale_weights_];
 }
 
-void LHEInfoReader::setBranchAddresses(TTree* tree)
+void
+LHEInfoReader::setBranchAddresses(TTree * tree)
 {
-  if ( instances_[branchName_scale_weights_] == this ) {
-    tree->SetBranchAddress(branchName_scale_nWeights_.data(), &scale_nWeights_);   
-    scale_weights_ = new Float_t[max_scale_nWeights_];
-    tree->SetBranchAddress(branchName_scale_weights_.data(), scale_weights_); 
-    scale_ids_ = new Int_t[max_scale_nWeights_];
-    tree->SetBranchAddress(branchName_scale_ids_.data(), scale_ids_); 
-    tree->SetBranchAddress(branchName_pdf_nWeights_.data(), &pdf_nWeights_);   
-    pdf_weights_ = new Float_t[max_pdf_nWeights_];
-    tree->SetBranchAddress(branchName_pdf_weights_.data(), pdf_weights_); 
+  if(instances_[branchName_scale_weights_] == this && has_LHE_weights_)
+  {
+    BranchAddressInitializer bai(tree);
+    bai.setBranchAddress(scale_nWeights_, branchName_scale_nWeights_);
+    bai.setBranchAddress(pdf_nWeights_, branchName_pdf_nWeights_);
+    bai.setLenVar(max_scale_nWeights_).setBranchAddress(scale_weights_, branchName_scale_weights_);
+    bai.setLenVar(max_pdf_nWeights_).setBranchAddress(pdf_weights_, branchName_pdf_weights_);
   }
 }
 
-void LHEInfoReader::read() const
+void
+LHEInfoReader::read() const
 {
-  LHEInfoReader* gInstance = instances_[branchName_scale_weights_];
+  const LHEInfoReader * const gInstance = instances_[branchName_scale_weights_];
   assert(gInstance);
-  if ( gInstance->scale_nWeights_ > max_scale_nWeights_ ) {
-    throw cms::Exception("LHEInfoReader") 
-      << "Number of Scale weights stored in Ntuple = " << gInstance->scale_nWeights_ << ", exceeds max_scale_nWeights_ = " << max_scale_nWeights_ << " !!\n";
+  if(! has_LHE_weights_)
+  {
+    return;
   }
-  weight_scale_xUp_   = 1.;
-  weight_scale_xDown_ = 1.;
-  weight_scale_yUp_   = 1.;
-  weight_scale_yDown_ = 1.;
-  for ( int idx = 0; idx < gInstance->scale_nWeights_; ++idx ) {
-    double weight = gInstance->scale_weights_[idx];
-    int id = gInstance->scale_ids_[idx];
-    if      ( id == 1002 ) weight_scale_xUp_   = weight; // muF = 2, muR = 1
-    else if ( id == 1003 ) weight_scale_xDown_ = weight; // muF = 0.5, muR = 1
-    else if ( id == 1004 ) weight_scale_yUp_   = weight; // muF = 1, muR = 2
-    else if ( id == 1007 ) weight_scale_yDown_ = weight; // muF = 1, muR = 0.5
+  if(gInstance->scale_nWeights_ > max_scale_nWeights_)
+  {
+    throw cmsException(this)
+      << "Number of Scale weights stored in Ntuple = " << gInstance->scale_nWeights_
+      << ", exceeds max_scale_nWeights_ = " << max_scale_nWeights_ << " !!\n";
   }
-  if ( gInstance->pdf_nWeights_ > max_pdf_nWeights_ ) {
-    throw cms::Exception("LHEInfoReader") 
-      << "Number of PDF weights stored in Ntuple = " << gInstance->pdf_nWeights_ << ", exceeds max_pdf_nWeights_ = " << max_pdf_nWeights_ << " !!\n";
+
+  // Karl: the nomenclature depends on the MG version used
+  // below MG ver 2.6:
+  //    [0] is muR=0.5 muF=0.5
+  //    [1] is muR=0.5 muF=1.0
+  //    [2] is muR=0.5 muF=2.0
+  //    [3] is muR=1.0 muF=0.5
+  //    [4] is muR=1.0 muF=1.0
+  //    [5] is muR=1.0 muF=2.0
+  //    [6] is muR=2.0 muF=0.5
+  //    [7] is muR=2.0 muF=1.0
+  //    [8] is muR=2.0 muF=2.0
+  if(gInstance->scale_nWeights_ == 9)
+  {
+    weight_scale_yDown_ = gInstance->scale_weights_[1]; // muR=0.5 muF=1.0
+    weight_scale_xDown_ = gInstance->scale_weights_[3]; // muR=1.0 muF=0.5
+    weight_scale_xUp_   = gInstance->scale_weights_[5]; // muR=1.0 muF=2.0
+    weight_scale_yUp_   = gInstance->scale_weights_[7]; // muR=2.0 muF=1.0
+  }
+  else
+  {
+    weight_scale_yDown_ = 1.; // muR=0.5 muF=1.0
+    weight_scale_xDown_ = 1.; // muR=1.0 muF=0.5
+    weight_scale_xUp_   = 1.; // muR=1.0 muF=2.0
+    weight_scale_yUp_   = 1.; // muR=2.0 muF=1.0
+    std::cerr << "Unexpected number of LHE scale weights: " << gInstance->scale_nWeights_ << '\n';
+    return;
+  }
+
+  if(gInstance->pdf_nWeights_ > max_pdf_nWeights_)
+  {
+    throw cmsException(this)
+      << "Number of PDF weights stored in Ntuple = " << gInstance->pdf_nWeights_
+      << ", exceeds max_pdf_nWeights_ = " << max_pdf_nWeights_ << " !!\n";
   }
 }
 
-double LHEInfoReader::getWeight_scale_xUp() const 
+double
+LHEInfoReader::getWeight_scale_xUp() const
 { 
-  return weight_scale_xUp_; 
-}
-double LHEInfoReader::getWeight_scale_xDown() const 
-{ 
-  return weight_scale_xDown_; 
-}
-double LHEInfoReader::getWeight_scale_yUp() const 
-{
-  return weight_scale_yUp_; 
-}
-double LHEInfoReader::getWeight_scale_yDown() const 
-{ 
-  return weight_scale_yDown_; 
+  return LHEInfoReader::clip(weight_scale_xUp_);
 }
 
-int LHEInfoReader::getNumWeights_pdf() const
-{
-  return pdf_nWeights_;
+double
+LHEInfoReader::getWeight_scale_xDown() const
+{ 
+  return LHEInfoReader::clip(weight_scale_xDown_);
 }
-double LHEInfoReader::getWeight_pdf(int idx) const
+
+double
+LHEInfoReader::getWeight_scale_yUp() const
 {
-  if ( !(idx >= 0 && idx < pdf_nWeights_) ) {
-    throw cms::Exception("LHEInfoReader") 
-      << "Given index = " << idx << ", exceeds number of PDF weights stored in Ntuple = " << pdf_nWeights_ << " !!\n";
+  return LHEInfoReader::clip(weight_scale_yUp_);
+}
+
+double
+LHEInfoReader::getWeight_scale_yDown() const
+{ 
+  return LHEInfoReader::clip(weight_scale_yDown_);
+}
+
+double
+LHEInfoReader::getWeight_scale(int central_or_shift) const
+{
+  switch(central_or_shift)
+  {
+    case kLHE_scale_central: return 1.;
+    case kLHE_scale_xDown:   return LHEInfoReader::clip(getWeight_scale_xDown());
+    case kLHE_scale_xUp:     return LHEInfoReader::clip(getWeight_scale_xUp());
+    case kLHE_scale_yDown:   return LHEInfoReader::clip(getWeight_scale_yDown());
+    case kLHE_scale_yUp:     return LHEInfoReader::clip(getWeight_scale_yUp());
+    default: throw cmsException(this, __func__, __LINE__)
+               << "Invalid LHE scale systematics option: " << central_or_shift;
   }
-  return pdf_weights_[idx];
 }
 
+int
+LHEInfoReader::getNumWeights_pdf() const
+{
+  // If the # of PDF error sets is
+  // a) 33 -- PDF4LHC15_nnlo_30_pdfas (LHAID = 91400) (http://www.hepforge.org/archive/lhapdf/pdfsets/6.2/PDF4LHC15_nnlo_30_pdfas.tar.gz)
+  //          mem=0 => alphas(MZ)=0.118 central value; mem=1-30 => PDF symmetric eigenvectors; mem=31 => alphas(MZ)=0.1165 central value; mem=32 => alphas(MZ)=0.1195
+  // b) 103
+  //    i) NNPDF31_nnlo_hessian_pdfas (LHAID = 306000) (http://www.hepforge.org/archive/lhapdf/pdfsets/6.2/NNPDF31_nnlo_hessian_pdfas.tar.gz)
+  //       mem=0 central value => Alphas(MZ)=0.118; mem=1-100 => PDF eig.; mem=101 => central value Alphas(MZ)=0.116; mem=102 => central value Alphas(MZ)=0.120
+  //
+  //    ii) NNPDF30_nlo_nf_4_pdfas (LHAID = 292000) for some FXFX 80X samples (http://www.hepforge.org/archive/lhapdf/pdfsets/6.2/NNPDF30_nlo_nf_4_pdfas.tar.gz)
+  //        mem=0 to mem=100 with alphas(MZ)=0.118, mem=0 => average on replicas 1-100; mem=1-100 => PDF replicas with  alphas(MZ)=0.118;
+  //        mem=101 => central value for alphas=0.117; mem=102 => central value for alphas=0.119; maximum number of active flavors NF=4
+  //
+  //    iii) NNPDF30_nlo_nf_5_pdfas (LHAID = 292200) for some FXFX 80X samples (http://www.hepforge.org/archive/lhapdf/pdfsets/6.2/NNPDF30_nlo_nf_5_pdfas.tar.gz)
+  //         mem=0 to mem=100 with alphas(MZ)=0.118, mem=0 => average on replicas 1-100; mem=1-100 => PDF replicas with  alphas(MZ)=0.118;
+  //         mem=101 => central value for alphas=0.117; mem=102 => central value for alphas=0.119
+  // c) 101
+  //    i) NNPDF30_nlo_as_0118 (LHAID = 260000) for some 92X samples (http://www.hepforge.org/archive/lhapdf/pdfsets/6.2/NNPDF30_nlo_as_0118.tar.gz)
+  //       alphas(MZ)=0.118. mem=0 => average on replicas; mem=1-100 => PDF replicas
 
+  //    ii) NNPDF30_lo_as_0130 (LHAID = 262000) for some MLM 80X samples (http://www.hepforge.org/archive/lhapdf/pdfsets/6.2/NNPDF30_lo_as_0130.tar.gz)
+  //        alphas(MZ)=0.130. mem=0 => average on replicas; mem=1-100 => PDF replicas
+  //
+  // In order to find out which PDF error set the sample has, open the Ntuple, read the LHEPDFweight array branch and look for LHEID in the title of the branch.
+  return has_LHE_weights_ ? pdf_nWeights_ : 1;
+}
 
+double
+LHEInfoReader::getWeight_pdf(unsigned int idx) const
+{
+  if(! has_LHE_weights_)
+  {
+    return 1.;
+  }
+  if(idx >= pdf_nWeights_)
+  {
+    throw cmsException(this)
+      << "Given index = " << idx << ", exceeds number of PDF weights stored in Ntuple = "
+      << pdf_nWeights_ << " !!\n";
+  }
+  return LHEInfoReader::clip(pdf_weights_[idx]);
+}
 
-
-
-
+double
+LHEInfoReader::clip(double value,
+                    double min_value,
+                    double max_value)
+{
+  return std::min(std::max(value, min_value), max_value);
+}

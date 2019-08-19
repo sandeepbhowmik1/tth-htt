@@ -22,7 +22,8 @@ def append_to_key(key, part):
 def getKey(*args):
     key = ""
     for part in args:
-        key = append_to_key(key, part)
+        if part != "":
+            key = append_to_key(key, part)
     return key
 
 def create_cfg(cfg_file_original, cfg_file_modified, lines):
@@ -42,22 +43,19 @@ def create_cfg(cfg_file_original, cfg_file_modified, lines):
     f_modified.write(cfg_modified)
     f_modified.close()
 
-def createFile(fileName, lines):
+def createFile(fileName, lines, nofNewLines = 2):
     """Auxiliary function to write new config file,
        containg the lines given as argument.
     """
-    content = ""
-    for line in lines:
-        content += "%s\n" % line
-    content += "\n"
-    f = open(fileName, "w")
-    f.write(content)
-    f.close()
+    content = "\n".join(lines)
+    content += nofNewLines * "\n"
+    with open(fileName, "w") as f:
+      f.write(content)
 
-def initializeInputFileIds(sample_name, sample_info, max_files_per_job):
+def initializeInputFileIds(sample_info, max_files_per_job):
     """Retrieves the number of input ROOT files (Ntuples) corresponding to a given sample
        and fills the number into the dictionary 'inputFileIds', with the name of the sample as key
-       
+
        TODO: add blacklist to the secondary storage as well
     """
     #print "<initializeInputFileIds>:"
@@ -78,23 +76,22 @@ def initializeInputFileIds(sample_name, sample_info, max_files_per_job):
     inputFileIds = generate_file_ids(nof_inputFiles, max_files_per_job, blacklist)
     return ( inputFileIds, secondary_files, primary_store, secondary_store )
 
-def generateInputFileList(sample_name, sample_info, max_files_per_job, debug = False):
-    #print "<generateInputFileList>:"
-    ( inputFileIds, secondary_files, primary_store, secondary_store ) = initializeInputFileIds(sample_name, sample_info, max_files_per_job)
+def generateInputFileList(sample_info, max_files_per_job):
+    ( inputFileIds, secondary_files, primary_store, secondary_store ) = initializeInputFileIds(sample_info, max_files_per_job)
     inputFileList = {}
     if max_files_per_job > 1:
         for jobId in range(len(inputFileIds)):
-            inputFileList[jobId + 1] = generate_input_list(inputFileIds[jobId], secondary_files, primary_store, secondary_store, debug)
+            inputFileList[jobId + 1] = generate_input_list(inputFileIds[jobId], secondary_files, primary_store, secondary_store)
     elif max_files_per_job == 1:
         for jobId_it in range(len(inputFileIds)):
             jobId = inputFileIds[jobId_it]
-            inputFileList[jobId[0]] = generate_input_list(jobId, secondary_files, primary_store, secondary_store, debug)
+            inputFileList[jobId[0]] = generate_input_list(jobId, secondary_files, primary_store, secondary_store)
     return inputFileList
 
-def createMakefile(makefileName, targets, lines_makefile, filesToClean = None, isSbatch = False):
+def createMakefile(makefileName, targets, lines_makefile, filesToClean = None, isSbatch = False, phoniesToAdd = []):
     """Creates Makefile that runs the complete analysis workfow.
     """
-    
+
     lines_makefile_with_header = []
     lines_makefile_with_header.append(".DEFAULT_GOAL := all")
     lines_makefile_with_header.append("SHELL := /bin/bash")
@@ -105,9 +102,10 @@ def createMakefile(makefileName, targets, lines_makefile, filesToClean = None, i
     if filesToClean:
         phonies.append('clean')
     if isSbatch:
-        phonies.append('sbatch_analyze sbatch_addBackgrounds sbatch_addFakes')
-    if phonies:
+        phonies.append(' '.join(phoniesToAdd))
+    if len(phonies) > 0:
         lines_makefile_with_header.append(".PHONY: %s" % ' '.join(phonies))
+        lines_makefile_with_header.append("")
     if filesToClean:
         lines_makefile_with_header.append("clean:")
         for fileToClean in filesToClean:
@@ -115,3 +113,43 @@ def createMakefile(makefileName, targets, lines_makefile, filesToClean = None, i
         lines_makefile_with_header.append("")
     lines_makefile_with_header.extend(lines_makefile)
     createFile(makefileName, lines_makefile_with_header)
+
+def is_dymc_reweighting(dbs_name):
+  return dbs_name.startswith('/DY') and 'M-50' in dbs_name and not dbs_name.startswith('/DYBB')
+
+def split_stitched(samples_to_stitch, startstring):
+    assert(startstring in [ 'DY', 'W' ])
+    samples_inclusive = []
+    samples_binned = []
+    for sample_set in samples_to_stitch:
+        for sample_key, sample_value in sample_set.items():
+            if sample_key == 'inclusive':
+                inclusive_samples = list(filter(
+                    lambda sample_name: sample_name.startswith(startstring), sample_value['samples']
+                ))
+                samples_inclusive.extend(inclusive_samples)
+            else:
+                for sample_binned_value in sample_value:
+                    binned_samples = list(filter(
+                        lambda sample_name: sample_name.startswith(startstring), sample_binned_value['samples']
+                    ))
+                    samples_binned.extend(binned_samples)
+    return samples_inclusive, samples_binned
+
+def get_tH_weight_str(kt, kv, cosa = None):
+    result = "kt_%.3g_kv_%.6g" % (kt, kv)
+    if cosa:
+        result += "_cosa_%.4g" % cosa
+    result = result.replace('.', 'p').replace('-', 'm')
+    return result
+
+def get_tH_SM_str():
+    return get_tH_weight_str(1.0, 1.0)
+
+def get_tH_params(kt_kv_cosa_str):
+    kt_kv_cosa_str_repl = kt_kv_cosa_str.replace('m', '-').replace('p', '.')
+    cosa_idx = kt_kv_cosa_str_repl.find('cosa_')
+    kt_str = kt_kv_cosa_str_repl[kt_kv_cosa_str_repl.find('kt_') + 3 : kt_kv_cosa_str_repl.find('kv_') - 1]
+    kv_str = kt_kv_cosa_str_repl[kt_kv_cosa_str_repl.find('kv_') + 3 : len(kt_kv_cosa_str_repl) if cosa_idx < 0 else (cosa_idx - 1)]
+    cosa_str = '' if cosa_idx < 0 else kt_kv_cosa_str_repl[cosa_idx + 5 : ]
+    return (float(kt_str), float(kv_str), float(cosa_str) if cosa_str else None)

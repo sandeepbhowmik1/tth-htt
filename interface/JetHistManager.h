@@ -1,7 +1,7 @@
 #ifndef tthAnalysis_HiggsToTauTau_JetHistManager_h
 #define tthAnalysis_HiggsToTauTau_JetHistManager_h
 
-/** \class HadTauHistManager
+/** \class JetHistManager
  *
  * Book and fill histograms for jets (b-tagged and non-b-tagged) in ttH, H->tautau analysis
  *
@@ -15,26 +15,39 @@
 class JetHistManager
   : public HistManagerBase
 {
- public:
-  JetHistManager(edm::ParameterSet const& cfg);
+public:
+  JetHistManager(const edm::ParameterSet & cfg);
   ~JetHistManager() {}
 
   /// book and fill histograms
-  void bookHistograms(TFileDirectory& dir);
-  void fillHistograms(const RecoJet& jet, double evtWeight);
-  void fillHistograms(const std::vector<const RecoJet*>& jets, double evtWeight);
+  void
+  bookHistograms(TFileDirectory & dir) override;
 
- private:
-  TH1* histogram_pt_;
-  TH1* histogram_eta_;
-  TH1* histogram_phi_;
-  TH1* histogram_mass_;
+  void
+  fillHistograms(const RecoJet & jet,
+                 double evtWeight);
 
-  TH1* histogram_BtagCSV_; 
+  void
+  fillHistograms(const std::vector<const RecoJet *> & jets,
+                 double evtWeight);
 
-  TH1* histogram_abs_genPdgId_;
+  /// flag to book & fill either minimal (pt, eta, phi) or full (incl. mass and b-tagging discriminant) set of histograms 
+  /// 
+  /// Note: use kOption_minimalHistograms whenever possible, to reduce memory consumption of hadd jobs
+  enum { kOption_undefined, kOption_allHistograms, kOption_minimalHistograms };
 
-  std::vector<TH1*> histograms_;
+private:
+  TH1 * histogram_pt_;
+  TH1 * histogram_eta_;
+  TH1 * histogram_phi_;
+  TH1 * histogram_abs_genPdgId_;
+
+  TH1 * histogram_mass_;
+  TH1 * histogram_BtagCSV_;
+
+  std::vector<TH1 *> histograms_;
+
+  int option_; // flag to book & fill either full or minimal set of histograms (to reduce memory consumption of hadd jobs)
 
   int idx_; // flag to select leading or subleading jet (set idx to -1 to make plots for all jets)
 };

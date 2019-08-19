@@ -3,82 +3,85 @@
 
 #include "tthAnalysis/HiggsToTauTau/interface/RecoLepton.h" // RecoLepton
 
-#include <ostream>
+// forward declarations
+enum class EGammaID;
+enum class EGammaWP;
 
 class RecoElectron
   : public RecoLepton
 {
- public:
+public:
   RecoElectron() = default;
-  RecoElectron(Double_t pt,
-	       Double_t eta,
-	       Double_t phi,
-	       Double_t mass,
-	       Int_t pdgId,
-	       Double_t dxy,
-	       Double_t dz,
-	       Double_t relIso,
-	       Double_t chargedHadRelIso03,
-	       Double_t miniIsoCharged,
-	       Double_t miniIsoNeutral,
-	       Double_t sip3d,
-	       Double_t mvaRawTTH,
-	       Double_t jetNDauChargedMVASel,
-	       Double_t jetPtRel,
-	       Double_t jetPtRatio,
-	       Double_t jetBtagCSV,
-	       Int_t passesTightCharge,
-	       Int_t charge,
-	       Double_t mvaRawPOG_GP,
-	       Double_t mvaRawPOG_HZZ,
-	       Double_t sigmaEtaEta,
-	       Double_t HoE,
-	       Double_t deltaEta,
-	       Double_t deltaPhi,
-	       Double_t OoEminusOoP,
-	       Int_t nLostHits,
-	       Int_t passesConversionVeto);
+  RecoElectron(const RecoLepton & lepton,
+               Double_t eCorr,
+               Double_t sigmaEtaEta,
+               Double_t HoE,
+               Double_t deltaEta,
+               Double_t deltaPhi,
+               Double_t OoEminusOoP,
+               Int_t nLostHits,
+               Bool_t passesConversionVeto,
+               Int_t cutbasedID_HLT);
 
   /**
    * @brief Funtions to access data-members
    * @return Values of data-members
    */
-  Double_t mvaRawPOG_GP() const { return mvaRawPOG_GP_; }
-  Double_t mvaRawPOG_HZZ() const { return mvaRawPOG_HZZ_; }
-  Double_t sigmaEtaEta() const { return sigmaEtaEta_; }
-  Double_t HoE() const { return HoE_; }
-  Double_t deltaEta() const { return deltaEta_; }
-  Double_t deltaPhi() const { return deltaPhi_; }
-  Double_t OoEminusOoP() const { return OoEminusOoP_; }
-  Int_t nLostHits() const { return nLostHits_; }
-  Int_t passesConversionVeto() const { return passesConversionVeto_; }
+  Double_t eCorr() const;
+  Double_t mvaRaw_POG() const;
+  Double_t mvaRaw_POG(EGammaID id) const;
+  Bool_t mvaID_POG(EGammaWP wp) const;
+  Bool_t mvaID_POG(EGammaID id, EGammaWP wp) const;
+  Double_t sigmaEtaEta() const;
+  Double_t HoE() const;
+  Double_t deltaEta() const;
+  Double_t deltaPhi() const;
+  Double_t etaSC() const;
+  Double_t phiSC() const;
+  Double_t absEtaSC() const;
+  Double_t OoEminusOoP() const;
+  Int_t nLostHits() const;
+  Bool_t passesConversionVeto() const;
+  Int_t cutbasedID_HLT() const;
 
   /**
    * @brief Checks whether a given lepton is an electron by its PDG id
    * @return True if it is an electron; false otherwise
    */
   bool
-  is_electron() const { return true; }
+  is_electron() const override;
 
   /**
    * @brief Checks whether a given lepton is a muon by its PDG id
    * @return True if it is a muon; false otherwise
    */
   bool
-  is_muon() const { return false; }
+  is_muon() const override;
+
+  bool isGenMatched(bool requireChargeMatch) const;
+
+  friend class RecoElectronReader;
+
+protected:
 
 //--- observables specific to electrons
-  Double_t mvaRawPOG_GP_;         ///< raw output value of EGamma POG electron id MVA, General Purpose (pt>10)
-  Double_t mvaRawPOG_HZZ_;         ///< raw output value of EGamma POG electron id MVA, HZZ(pt < 10)
-  Double_t sigmaEtaEta_;       ///< second shower moment in eta-direction
-  Double_t HoE_;               ///< ratio of energy deposits in hadronic/electromagnetic section of calorimeter
-  Double_t deltaEta_;          ///< difference in eta between impact position of track and electron cluster
-  Double_t deltaPhi_;          ///< difference in phi between impact position of track and electron cluster
-  Double_t OoEminusOoP_;       ///< difference between calorimeter energy and track momentum (1/E - 1/P)
-  Int_t nLostHits_;            ///< number of operational tracker layers between interaction point and innermost hit on track
-  Int_t passesConversionVeto_; ///< Flag indicating if electron passes (1) or fails (0) photon conversion veto
+  Double_t eCorr_;              ///< ratio of the calibrated energy/miniaod energy
+  Double_t sigmaEtaEta_;        ///< second shower moment in eta-direction
+  Double_t HoE_;                ///< ratio of energy deposits in hadronic/electromagnetic section of calorimeter
+  Double_t deltaEta_;           ///< difference in eta between impact position of track and electron cluster
+  Double_t deltaPhi_;           ///< difference in phi between impact position of track and electron cluster
+  Double_t OoEminusOoP_;        ///< difference between calorimeter energy and track momentum (1/E - 1/P)
+  Int_t nLostHits_;             ///< number of operational tracker layers between interaction point and innermost hit on track
+  Bool_t passesConversionVeto_; ///< Flag indicating if electron passes (true) or fails (false) photon conversion veto
+  Int_t cutbasedID_HLT_;        ///< Cut-based HLT electron ID
+
+//--- all EGamma IDs and their raw values
+  std::map<EGammaID, std::map<EGammaWP, Bool_t>> egammaID_ids_;
+  std::map<EGammaID, Double_t> egammaID_raws_;
 };
 
-std::ostream& operator<<(std::ostream& stream, const RecoElectron& electron);
+std::ostream &
+operator<<(std::ostream & stream,
+           const RecoElectron & electron);
 
 #endif // tthAnalysis_HiggsToTauTau_RecoElectron_h

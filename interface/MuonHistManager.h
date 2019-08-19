@@ -10,46 +10,56 @@
  */
 
 #include "tthAnalysis/HiggsToTauTau/interface/HistManagerBase.h" // HistManagerBase
-#include "tthAnalysis/HiggsToTauTau/interface/RecoMuon.h"
+#include "tthAnalysis/HiggsToTauTau/interface/RecoMuon.h" // RecoMuon
 
 class MuonHistManager
   : public HistManagerBase
 {
- public:
-  MuonHistManager(edm::ParameterSet const& cfg);
+public:
+  MuonHistManager(const edm::ParameterSet & cfg);
   ~MuonHistManager() {}
 
   /// book and fill histograms
-  void bookHistograms(TFileDirectory& dir);
-  void fillHistograms(const RecoMuon& muon, double evtWeight);
-  void fillHistograms(const std::vector<const RecoMuon*>& muons, double evtWeight);
-  void fillHistograms2(const RecoMuon& muon, double evtWeight, double met, double metphi, double ptfix);                       // NEWLY ADDED
-  void fillHistograms2(const std::vector<const RecoMuon*>& muons, double evtWeight, double met, double metphi, double ptfix);  // NEWLY ADDED
+  void
+  bookHistograms(TFileDirectory & dir) override;
 
- private:
-  TH1* histogram_pt_;
-  TH1* histogram_eta_;
-  TH1* histogram_phi_;
-  TH1* histogram_charge_;
+  void
+  fillHistograms(const RecoMuon & muon,
+                 double evtWeight);
 
-  TH1* histogram_dxy_;
-  TH1* histogram_dz_;     
-  TH1* histogram_relIso_;  
-  TH1* histogram_sip3d_;
-  TH1* histogram_mvaRawTTH_; 
-  TH1* histogram_jetPtRatio_;  
-  TH1* histogram_jetBtagCSV_; 
-  TH1* histogram_tightCharge_;      
-  TH1* histogram_passesLooseIdPOG_;
-  TH1* histogram_passesMediumIdPOG_;
+  void
+  fillHistograms(const std::vector<const RecoMuon *> & muons,
+                 double evtWeight);
 
-  TH1* histogram_abs_genPdgId_;
-  TH1* histogram_gen_times_recCharge_;
+  /// flag to book & fill either minimal (cone_pt, eta, phi) or full (incl. muon ID variables) set of histograms 
+  /// 
+  /// Note: use kOption_minimalHistograms whenever possible, to reduce memory consumption of hadd jobs
+  enum { kOption_undefined, kOption_allHistograms, kOption_minimalHistograms };
 
-  TH1* histogram_Mt_;     // NEWLY ADDED
-  TH1* histogram_Mt_fix_; // NEWLY ADDED
+private:
+  TH1 * histogram_cone_pt_;
+  TH1 * histogram_eta_;
+  TH1 * histogram_phi_;
+  TH1 * histogram_abs_genPdgId_;
 
-  std::vector<TH1*> histograms_;
+  TH1 * histogram_pt_;
+  TH1 * histogram_assocJet_pt_;
+  TH1 * histogram_charge_;
+  TH1 * histogram_dxy_;
+  TH1 * histogram_dz_;
+  TH1 * histogram_relIso_;
+  TH1 * histogram_sip3d_;
+  TH1 * histogram_mvaRawTTH_;
+  TH1 * histogram_jetPtRatio_;
+  TH1 * histogram_jetBtagCSV_;
+  TH1 * histogram_tightCharge_;
+  TH1 * histogram_passesLooseIdPOG_;
+  TH1 * histogram_passesMediumIdPOG_;
+  TH1 * histogram_gen_times_recCharge_;
+
+  std::vector<TH1 *> histograms_;
+
+  int option_; // flag to book & fill either full or minimal set of histograms (to reduce memory consumption of hadd jobs)
 
   int idx_; // flag to select leading or subleading muon (set idx to -1 to make plots for all muons)
 };

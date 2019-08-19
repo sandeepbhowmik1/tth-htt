@@ -1,18 +1,22 @@
-import codecs, getpass, jinja2, logging, os, time, datetime, sys
+from tthAnalysis.HiggsToTauTau.jobTools import run_cmd, get_log_version
+from tthAnalysis.HiggsToTauTau.sbatchManagerTools import is_file_ok
+from tthAnalysis.HiggsToTauTau.common import logging
 
-from tthAnalysis.HiggsToTauTau.ClusterHistogramAggregator import ClusterHistogramAggregator
-from tthAnalysis.HiggsToTauTau.jobTools import create_if_not_exists, run_cmd
+import codecs
+import getpass
+import jinja2
+import os
+import time
+import datetime
+import sys
+import random
+import uuid
 
 # Template for wrapper that is ran on cluster node
 
-current_dir       = os.path.dirname(os.path.realpath(__file__))
-job_template_file = os.path.join(current_dir, 'sbatch-node.template.sh')
-job_template      = open(job_template_file, 'r').read()
-
-submit_job_version2_template_file = os.path.join(current_dir, 'sbatch-node.submit_job_version2_template.sh')
-submit_job_version2_template      = open(submit_job_version2_template_file, 'r').read()
-
-command_create_scratchDir = '/scratch/mkscratch'
+jinja_template_dir = os.path.join(
+  os.getenv('CMSSW_BASE'), 'src', 'tthAnalysis', 'HiggsToTauTau', 'python', 'templates'
+)
 
 # Define error classes
 
@@ -31,22 +35,41 @@ class sbatchManagerSyntaxError(sbatchManagerError):
 class sbatchManagerRuntimeError(sbatchManagerError):
     pass
 
+class sbatchManagerIOError(sbatchManagerError):
+    pass
+
+class sbatchManagerMissingFileError(sbatchManagerError):
+    pass
+
+class sbatchManagerCopyError(sbatchManagerError):
+    pass
+
+class sbatchManagerValidationError(sbatchManagerError):
+    pass
+
 # Define Status
 
 class Status:
+  in_queue    = 0
   submitted   = 1
   completed   = 2
   running     = 3
 
-  memory_exceeded = 11
-  timeout         = 12
-  syntax_error    = 13
-  runtime_error   = 14
-  other_error     = 15
+  memory_exceeded  = 11
+  timeout          = 12
+  syntax_error     = 13
+  runtime_error    = 14
+  other_error      = 15
+  io_error         = 16
+  missing_file     = 17
+  cp_error         = 18
+  validation_error = 19
 
   @staticmethod
   def classify_error(ExitCode, DerivedExitCode, State):
-      if (ExitCode == '0:0' and DerivedExitCode == '0:0' and State == 'COMPLETED'):
+      if State in ['COMPLETING', 'RUNNING', 'PENDING']:
+          return Status.running
+      if (ExitCode in ['0:0', '0:1'] and DerivedExitCode in ['0:0', '0:1'] and State == 'COMPLETED'):
           return Status.completed
       if (ExitCode == '0:0' and DerivedExitCode == '0:0' and (State == 'CANCELLED' or
                                                               State == 'CANCELLED by 0')) or \
@@ -59,6 +82,16 @@ class Status:
           return Status.syntax_error
       if (ExitCode == '1:0' and DerivedExitCode == '0:0' and State == 'FAILED'):
           return Status.runtime_error
+      if (ExitCode == '2:0' and DerivedExitCode == '0:0' and State == 'FAILED'):
+          return Status.runtime_error
+      if (ExitCode == '3:0' and DerivedExitCode == '0:0' and State == 'FAILED'):
+          return Status.io_error
+      if (ExitCode == '4:0' and DerivedExitCode == '0:0' and State == 'FAILED'):
+          return Status.missing_file
+      if (ExitCode == '5:0' and DerivedExitCode == '0:0' and State == 'FAILED'):
+          return Status.cp_error
+      if (ExitCode == '6:0' and DerivedExitCode == '0:0' and State == 'FAILED'):
+          return Status.validation_error
       return Status.other_error
 
   @staticmethod
@@ -75,6 +108,14 @@ class Status:
           return 'syntax_error'
       if status_type == Status.runtime_error:
           return 'runtime_error'
+      if status_type == Status.io_error:
+          return 'io_error'
+      if status_type == Status.missing_file:
+          return 'missing_file'
+      if status_type == Status.cp_error:
+          return 'cp_error'
+      if status_type == Status.validation_error:
+          return 'validation_error'
       if status_type == Status.other_error:
           return 'other_error'
       return 'unknown_error'
@@ -89,7 +130,24 @@ class Status:
           return sbatchManagerSyntaxError
       if status_type == Status.runtime_error:
           return sbatchManagerRuntimeError
+      if status_type == Status.io_error:
+          return sbatchManagerRuntimeError
+      if status_type == Status.missing_file:
+          return sbatchManagerMissingFileError
+      if status_type == Status.cp_error:
+          return sbatchManagerCopyError
+      if status_type == Status.validation_error:
+          return sbatchManagerValidationError
       return sbatchManagerError
+
+# Define JobCompletion class to hold information about finished jobs
+
+class JobCompletion:
+  def __init__(self, status, exit_code = '-1:-1', derived_exit_code = '-1:-1', state = 'N/A'):
+      self.status            = status
+      self.exit_code         = exit_code
+      self.derived_exit_code = derived_exit_code
+      self.state             = state
 
 # Define sbatchManager
 
@@ -103,34 +161,63 @@ class sbatchManager:
          prio - ? (10min?) time limit, available immediately
     """
 
-    def __init__(self, pool_id = '', verbose = False):
+    def __init__(self,
+            pool_id = '',
+            verbose = False,
+            dry_run = False,
+            use_home = True,                 
+            max_resubmissions = 6,
+            min_file_size = 20000,
+            max_num_submittedJobs = 5000 
+          ):
+        self.max_pool_id_length = 256
         if not pool_id:
-            raise ValueError("pool_id not specified!")
+            raise ValueError("Parameter 'pool_id' not specified!")
+        if len(str(pool_id)) > self.max_pool_id_length:
+            raise ValueError(
+                "Parameter 'pool_id' exceeds maximum length of %i characters!" % self.max_pool_id_length
+            )
 
+        self.cmssw_base_dir = None
         self.workingDir     = None
         self.logFileDir     = None
         queue_environ = os.environ.get('SBATCH_PRIORITY')
-        self.queue          = queue_environ if queue_environ else "low"
-        self.poll_interval  = 30
-        self.jobIds         = {}
-        self.analysisName   = "tthAnalysis"
-        self.user           = getpass.getuser()
-        self.pool_id        = pool_id
-        self.log_completion = False
-        self.max_nof_greps  = 1000
-        self.sbatchArgs     = ''
-        self.datetime       = datetime.datetime.now().strftime('%m/%d/%y-%H:%M:%S')
+        verbose_environ = os.environ.get('SBATCH_VERBOSE')
+        self.sbatch_exclude = os.environ.get('SBATCH_EXCLUDE')
+        self.queue             = queue_environ if queue_environ else "small"
+        self.poll_interval     = 30
+        self.queuedJobs        = []
+        self.maxSubmittedJobs  = max_num_submittedJobs
+        self.submittedJobs     = {}
+        self.analysisName      = "tthAnalysis"
+        self.user              = getpass.getuser()
+        self.pool_id           = pool_id
+        self.log_completion    = verbose_environ
+        self.max_nof_greps     = 1000
+        self.sbatchArgs        = ''
+        self.datetime          = datetime.datetime.now().strftime('%m/%d/%y-%H:%M:%S')
+        self.dry_run           = dry_run
+        self.max_mem           = '1800M'
+        self.use_home          = use_home
+        self.max_resubmissions = max_resubmissions
+        self.min_file_size     = min_file_size
 
-        logging.basicConfig(
-            stream = sys.stdout,
-            level  = logging.DEBUG if verbose else logging.INFO,
-            format = '[%(filename)s:%(funcName)s] %(asctime)s - %(levelname)s: %(message)s',
-        )
+        if self.sbatch_exclude:
+            self.sbatchArgs += ' -x {}'.format(self.sbatch_exclude)
+
+        verbose = bool(verbose_environ) if verbose_environ else verbose
+        if verbose:
+            self.unmute()
 
     def setWorkingDir(self, workingDir):
         """Set path to CMSSW area in which jobs are executed
         """
         self.workingDir = workingDir
+
+    def setcmssw_base_dir(self, cmssw_base_dir):
+        """Set path to cmssw_base_dir area in which jobs are executed
+        """
+        self.cmssw_base_dir = cmssw_base_dir
 
     def setLogFileDir(self, logFileDir):
         """Set path to directory in which log files are to be stored (matters only if 'logFile'
@@ -144,27 +231,8 @@ class sbatchManager:
     def unmute(self):
         logging.getLogger().setLevel(logging.DEBUG)
 
-    def hadd_in_cluster(
-        self,
-        inputFiles                  = None,
-        outputFile                  = None,
-        maximum_histograms_in_batch = 20,
-        waitForJobs                 = True,
-        auxDirName                  = None,
-    ):
-        cluster_histogram_aggregator = ClusterHistogramAggregator(
-            input_histograms            = inputFiles,
-            final_output_histogram      = outputFile,
-            maximum_histograms_in_batch = maximum_histograms_in_batch,
-            waitForJobs                 = waitForJobs,
-            sbatch_manager              = self,
-            auxDirName                  = auxDirName,
-        )
-
-        cluster_histogram_aggregator.create_output_histogram()
-
     def check_job_completion(self, jobsId_list, default_completion = Status.completed):
-        completion = { k : default_completion for k in jobsId_list }
+        completion = { k : JobCompletion(status = default_completion) for k in jobsId_list }
 
         # If the input list is empty, just return here (we don't want to mess up the subprocess commands here)
         if not completion:
@@ -198,10 +266,12 @@ class sbatchManager:
             for line in lines:
                 JobID, ExitCode, DerivedExitCode, State = line.split('|')
                 if JobID in completion:
-                    if State in ['RUNNING', 'COMPLETING']:
-                      completion[JobID] = Status.running
-                    else:
-                      completion[JobID] = Status.classify_error(ExitCode, DerivedExitCode, State)
+                  completion[JobID] = JobCompletion(
+                      status            = Status.classify_error(ExitCode, DerivedExitCode, State),
+                      exit_code         = ExitCode,
+                      derived_exit_code = DerivedExitCode,
+                      state             = State,
+                  )
             return completion
         else:
             # Likely returned along the lines of (due to heavy load on the cluster since SQL DB is overloaded):
@@ -237,12 +307,20 @@ class sbatchManager:
                     k = line_split_eq_spaces[i]
                     v = line_split_eq_spaces[i + 1]
                     line_dict[k[-1]] = ' '.join(v[:-1] if i != len(line_split_eq_spaces) - 2 else v)
+                if not 'JobId' in line_dict.keys():
+                    print("Skipping line = '%s'" % line)
+                    continue
                 JobId = line_dict['JobId']
                 if JobId in completion:
-                    completion[JobId] = Status.classify_error(
-                      line_dict['ExitCode'],
-                      line_dict['DerivedExitCode'],
-                      line_dict['JobState'],
+                    completion[JobId] = JobCompletion(
+                        status = Status.classify_error(
+                          line_dict['ExitCode'],
+                          line_dict['DerivedExitCode'],
+                          line_dict['JobState'],
+                        ),
+                        exit_code         = line_dict['ExitCode'],
+                        derived_exit_code = line_dict['DerivedExitCode'],
+                        state             = line_dict['JobState']
                     )
             return completion
         else:
@@ -258,39 +336,65 @@ class sbatchManager:
         return completion
 
     def submit(self, cmd_str):
-        # Run command
-        cmd_outerr = run_cmd(cmd_str, return_stderr = True)
-        # Fails if stdout returned by the last line is empty
-        try:
-          job_id = cmd_outerr[0].split()[-1]
-        except IndexError:
-          raise IndexError("Caught an error: '%s'" % cmd_outerr[1])
+        nof_max_retries = 10
+        current_retry   = 0
+        while current_retry < nof_max_retries:
+          # Run command
+          cmd_outerr = run_cmd(cmd_str, return_stderr = True)
+          try:
+            job_id = cmd_outerr[0].split()[-1]
+            break
+          except IndexError:
+            # Fails if stdout returned by the last line is empty
+            logging.warning("Caught an error: '%s'; resubmitting %i-th time" % (cmd_outerr[1], current_retry))
+            current_retry += 1
+            logging.debug("sleeping for %i seconds." % 60)
+            time.sleep(60) # Let's wait for 60 seconds until the next resubmission
+
         # The job ID must be a number, so.. we have to check if it really is one
         try:
           int(job_id)
         except ValueError:
           raise ValueError("job_id = '%s' NaN; sbatch stdout = '%s'; sbatch stderr = '%s'" % \
                             (job_id, cmd_outerr[0], cmd_outerr[1]))
-        if job_id in self.jobIds:
+        if job_id in self.submittedJobs:
             raise RuntimeError("Same job ID: %s" % job_id)
         # Is a valid job ID
         return job_id
 
-    def submitJob(self, inputFiles, executable, cfgFile, outputFilePath, outputFiles,
-                  logFile = None, skipIfOutputFileExists = False):
+    def submitJob(self,
+            inputFiles,
+            executable,
+            command_line_parameter,
+            outputFilePath,
+            outputFiles,
+            scriptFile,
+            logFile                = None,
+            skipIfOutputFileExists = False,
+            job_template_file      = 'sbatch-node.sh.template',
+            nof_submissions        = 0,
+          ):
         """Waits for all sbatch jobs submitted by this instance of sbatchManager to finish processing
         """
+
+        logging.debug("<sbatchManager::submitJob>: job_template_file = '%s'" % job_template_file)
+
+        job_template_file = os.path.join(jinja_template_dir, job_template_file)
+        job_template = open(job_template_file, 'r').read()
+
         # raise if logfile missing
-        script_file = cfgFile.replace(".py", ".sh").replace("_cfg", "")
         if not logFile:
             if not self.logFileDir:
                 raise ValueError("Please call 'setLogFileDir' before calling 'submitJob' !!")
-            logFile = os.path.join(self.logFileDir, os.path.basename(script_file).replace(".sh", ".log"))
+            logFile = os.path.join(self.logFileDir, os.path.basename(scriptFile).replace(".sh", ".log"))
 
         # skip only if none of the output files are missing in the file system
+        outputFiles_fullpath = map(lambda outputFile: os.path.join(outputFilePath, outputFile), outputFiles)
         if skipIfOutputFileExists:
-            outputFiles_fullpath = map(lambda outputFile: os.path.join(outputFilePath, outputFile), outputFiles)
-            outputFiles_missing = [outputFile for outputFile in outputFiles_fullpath if not os.path.exists(outputFile)]
+            outputFiles_missing = [
+                outputFile for outputFile in outputFiles_fullpath \
+                if not is_file_ok(outputFile, validate_outputs = True, min_file_size = self.min_file_size)
+            ]
             if not outputFiles_missing:
                 logging.debug(
                   "output file(s) = %s exist(s) --> skipping !!" % \
@@ -301,107 +405,81 @@ class sbatchManager:
         if not self.workingDir:
             raise ValueError("Please call 'setWorkingDir' before calling 'submitJob' !!")
 
-        scratch_dir = self.get_scratch_dir()
+        if not self.cmssw_base_dir:
+            logging.warning("cmssw_base_dir not set, setting it to '%s'" % os.environ.get('CMSSW_BASE'))
+            self.cmssw_base_dir = os.environ.get('CMSSW_BASE')
+
+        job_dir = self.get_job_dir()
 
         # create script for executing jobs
         wrapper_log_file    = logFile.replace('.log', '_wrapper.log')
         executable_log_file = logFile.replace('.log', '_executable.log')
+        wrapper_log_file, executable_log_file = get_log_version((wrapper_log_file, executable_log_file))
 
-        sbatch_command = "sbatch --partition={partition} --output={output} --comment='{comment}' {args} {cmd}".format(
+        sbatch_command = "sbatch --partition={partition} --output={output} --comment='{comment}' " \
+                         "--mem={max_mem} {args} {cmd}".format(
           partition = self.queue,
           output    = wrapper_log_file,
           comment   = self.pool_id,
           args      = self.sbatchArgs,
-          cmd       = script_file,
+          cmd       = scriptFile,
+          max_mem   = self.max_mem,
         )
+
+        two_pow_sixteen = 65536
+        random.seed((abs(hash(command_line_parameter))) % two_pow_sixteen)
+        max_delay = 300
+        random_delay = random.randint(0, max_delay)
 
         script = jinja2.Template(job_template).render(
-            working_dir         = self.workingDir,
-            scratch_dir         = scratch_dir,
-            exec_name           = executable,
-            cfg_file            = cfgFile,
-            inputFiles          = " ".join(inputFiles),
-            outputDir           = outputFilePath,
-            outputFiles         = " ".join(outputFiles),
-            wrapper_log_file    = wrapper_log_file,
-            executable_log_file = executable_log_file,
-            RUNNING_COMMAND     = sbatch_command,
+            working_dir            = self.workingDir,
+            cmssw_base_dir         = self.cmssw_base_dir,
+            job_dir                = job_dir,
+            job_template_file      = job_template_file,
+            exec_name              = executable,
+            command_line_parameter = command_line_parameter,
+            inputFiles             = " ".join(inputFiles),
+            outputDir              = outputFilePath,
+            outputFiles            = " ".join(outputFiles),
+            wrapper_log_file       = wrapper_log_file,
+            executable_log_file    = executable_log_file,
+            script_file            = scriptFile,
+            RUNNING_COMMAND        = sbatch_command,
+            random_sleep           = random_delay
         )
-        logging.debug("writing sbatch script file = '%s'" % script_file)
-        with codecs.open(script_file, "w", "utf-8") as f:
-            f.write(script)
-
-        self.jobIds[self.submit(sbatch_command)] = {
-            'status'  : Status.submitted,
-            'log_wrap': wrapper_log_file,
-            'log_exec': executable_log_file,
-        }
-
-    def submit_job_version2(
-        self,
-        task_name  = None,
-        command    = None,
-        output_dir = None
-    ):
-        '''This method is similar to submitJob, but has less required parameters.
-           Supports multiple lines of Bash commands instead of fixed oneliner.
-        '''
-        logging.debug("task_name=%s, command=%s, output_dir=%s)" % (task_name, command, output_dir))
-
-        if not self.workingDir:
-            raise ValueError("Please call 'setWorkingDir' before calling 'submitJob' !!")
-
-        scratch_dir = self.get_scratch_dir()
-
-        # Create script for executing jobs
-
-        cfg_dir = os.path.join(output_dir, 'cfgs')
-        log_dir = os.path.join(output_dir, 'logs')
-        script_file         = os.path.join(cfg_dir, '%s.sh' % task_name)
-        wrapper_log_file    = os.path.join(log_dir, '%s_wrapper.log' % task_name)
-        executable_log_file = os.path.join(log_dir, '%s_executable.log' % task_name)
-        create_if_not_exists(cfg_dir)
-        create_if_not_exists(log_dir)
-
-        sbatch_command = "sbatch --partition={partition} --output={output} --comment='{comment}' {args} {cmd}".format(
-            partition = self.queue,
-            output    = wrapper_log_file,
-            comment   = self.pool_id,
-            args      = self.sbatchArgs,
-            cmd       = script_file,
-        )
-
-        script = jinja2.Template(submit_job_version2_template).render(
-            command             = command,
-            working_dir         = self.workingDir,
-            scratch_dir         = scratch_dir,
-            wrapper_log_file    = wrapper_log_file,
-            executable_log_file = executable_log_file,
-            sbatch_command      = sbatch_command,
-        )
-        logging.debug("writing sbatch script file = '%s'" % script_file)
-        with codecs.open(script_file, "w", "utf-8") as f:
+        logging.debug("writing sbatch script file = '%s'" % scriptFile)
+        with codecs.open(scriptFile, "w", "utf-8") as f:
             f.write(script)
             f.flush()
             os.fsync(f.fileno())
 
-        self.jobIds[self.submit(sbatch_command)] = {
-            'status'   : Status.submitted,
-            'log_wrap' : wrapper_log_file,
-            'log_exec' : executable_log_file,
-        }
+        if self.dry_run:
+            return
 
-    def get_scratch_dir(self):
-        scratch_dir = "/scratch/%s" % getpass.getuser()
-        if not os.path.exists(scratch_dir):
-            logging.info("Directory '%s' does not yet exist, creating it !!" % scratch_dir)
-            run_cmd(command_create_scratchDir)
-        scratch_dir = os.path.join(
-            scratch_dir,
-            "%s_%s" % (self.analysisName, datetime.date.today().isoformat()),
+        nof_submissions += 1
+        job = {
+            'sbatch_command'  : sbatch_command,
+            'status'          : Status.in_queue,
+            'log_wrap'        : wrapper_log_file,
+            'log_exec'        : executable_log_file,
+            'args'            : (
+                inputFiles, executable, command_line_parameter, outputFilePath, outputFiles,
+                scriptFile, logFile, skipIfOutputFileExists, job_template_file, nof_submissions,
+            ),
+            'nof_submissions' : nof_submissions,
+            'outputFiles'     : outputFiles_fullpath,
+        }
+        self.queuedJobs.append(job)
+
+    def get_job_dir(self):
+        if self.use_home:
+            prefix = os.path.join('/home', getpass.getuser(), 'jobs')
+        else:
+            prefix = os.path.join('/scratch', getpass.getuser())
+        job_dir = os.path.join(
+            prefix, "%s_%s" % (self.analysisName, datetime.date.today().isoformat()),
         )
-        create_if_not_exists(scratch_dir)
-        return scratch_dir
+        return job_dir
 
     def waitForJobs(self):
         """Waits for all sbatch jobs submitted by this instance of sbatchManager to finish processing
@@ -410,37 +488,81 @@ class sbatchManager:
 
         # Set a delimiter, which distinguishes entries b/w different jobs
         delimiter = ','
-        # Explanation:
-        # 1) squeue -h -u {{user}} -o '%i %36k'
+        # Explanation (the maximum pool ID length = 256 is configurable via self.max_pool_id_length):
+        # 1) squeue -h -u {{user}} -o '%i %256k'
         #      Collects the list of running jobs
         #        a) -h omits header
         #        b) -u {{user}} looks only for jobs submitted by {{user}}
-        #        c) -o '%i %36k' specifies the output format
+        #        c) -o '%i %256k' specifies the output format
         #           i)  %i -- job ID (1st column)
-        #           ii) %36k -- comment with width of 36 characters (2nd column)
+        #           ii) %256k -- comment with width of 256 characters (2nd column)
         #               If the job has no comments, the entry simply reads (null)
         # 2) grep {{comment}}
         #       Filter the jobs by the comment which must be unique per sbatchManager instance at all times
         # 3) awk '{print $1}'
-        #       Filter only the jobs IDs out
+        #       Filter only the jobIds out
         # 4) sed ':a;N;$!ba;s/\\n/{{delimiter}}/g'
         #       Place all job IDs to one line, delimited by {{delimiter}} (otherwise the logs are hard to read)
-        command_template = "squeue -h -u {{user}} -o '%i %36k' | grep {{comment}} | awk '{print $1}' | " \
+        command_template = "squeue -h -u {{user}} -o '%i %{{ pool_id_length }}k' | grep {{comment}} | awk '{print $1}' | " \
                            "sed ':a;N;$!ba;s/\\n/{{delimiter}}/g'"
         command = jinja2.Template(command_template).render(
-          user      = self.user,
-          comment   = self.pool_id,
-          delimiter = delimiter,
+          user           = self.user,
+          pool_id_length = self.max_pool_id_length,
+          comment        = self.pool_id,
+          delimiter      = delimiter
         )
 
         # Initially, all jobs are marked as submitted so we have to go through all jobs and check their exit codes
         # even if some of them have already finished
-        jobIds_set = set([ id_ for id_ in self.jobIds if self.jobIds[id_]['status'] == Status.submitted])
-        nofJobs_left = len(jobIds_set)
+        jobIds_set = set([
+            job_id for job_id in self.submittedJobs if self.submittedJobs[job_id]['status'] == Status.submitted
+        ])
+        nofJobs_left = len(jobIds_set) + len(self.queuedJobs)
         while nofJobs_left > 0:
-            # Get the list of running jobs and convert them to a set
-            poll_result = run_cmd(command, do_not_log = False)
-            polled_ids = set(poll_result.split(delimiter))
+            # Get the list of jobs submitted to batch system and convert their jobIds to a set
+            poll_result, poll_result_err = '', ''
+            while True:
+                poll_result, poll_result_err = run_cmd(command, do_not_log = False, return_stderr = True)
+                if not poll_result and poll_result_err:
+                    logging.warning('squeue caught an error: {squeue_error}'.format(squeue_error = poll_result_err))
+                else:
+                    break
+                # sleep a minute and then try again
+                # in principle we could limit the number of retries, but hopefully that's not necessary
+                logging.debug("sleeping for %i seconds." % 60)
+                time.sleep(60)
+            polled_ids = set()
+            if poll_result != '':
+                polled_ids = set(poll_result.split(delimiter))
+
+            # Check if number of jobs submitted to batch system is below maxSubmittedJobs;
+            # if it is, take jobs from queuedJobs list and submit them,
+            # until a total of maxSubmittedJobs is submitted to batch system
+            nofJobs_toSubmit = min(len(self.queuedJobs), self.maxSubmittedJobs - len(polled_ids))
+            if nofJobs_toSubmit > 0:
+                logging.debug(
+                    "Jobs: submitted = {}, in queue = {} --> submitting the next {} jobs.".format(
+                        len(polled_ids), len(self.queuedJobs), nofJobs_toSubmit
+                    )
+                )
+            else:
+                logging.debug(
+                    "Jobs: submitted = {}, in queue = {} --> waiting for submitted jobs to finish processing.".format(
+                        len(polled_ids), len(self.queuedJobs)
+                    )
+                )
+            for i in range(0, nofJobs_toSubmit):
+                # randomly submit a job from the queue
+                two_pow_sixteen = 65536
+                random.seed((abs(hash(uuid.uuid4()))) % two_pow_sixteen)
+                max_idx = len(self.queuedJobs) - 1
+                random_idx = random.randint(0, max_idx)
+                job = self.queuedJobs.pop(random_idx)
+                job['status'] = Status.submitted
+                job_id = self.submit(job['sbatch_command'])
+                self.submittedJobs[job_id] = job
+
+            # Now check status of jobs submitted to batch system:
             # Subtract the list of running jobs from the list of all submitted jobs -- the result is a list of
             # jobs that have finished already
             finished_ids = list(jobIds_set - polled_ids)
@@ -459,25 +581,40 @@ class sbatchManager:
                 for finished_ids_chunk in finished_ids_chunks:
                     completion = self.check_job_completion(finished_ids_chunk)
                     completed_jobs, running_jobs, failed_jobs = [], [], []
-                    for id_, state in completion.iteritems():
-                      if state == Status.completed:
-                        completed_jobs.append(id_)
-                      elif state == Status.running:
-                        running_jobs.append(id_)
+                    for job_id, details in completion.iteritems():
+                      if details.status == Status.completed:
+                        completed_jobs.append(job_id)
+                      elif details.status == Status.running:
+                        running_jobs.append(job_id)
                       else:
-                        failed_jobs.append(id_)
+                        failed_jobs.append(job_id)
                     # If there are any failed jobs, throw
                     if failed_jobs:
+
                         failed_jobs_str = ','.join(failed_jobs)
-                        errors          = [completion[id_] for id_ in failed_jobs]
+                        errors          = [completion[job_id].status for job_id in failed_jobs]
                         logging.error("Job(s) w/ ID(s) {jobIds} finished with errors: {reasons}".format(
                             jobIds  = failed_jobs_str,
                             reasons = ', '.join(map(Status.toString, errors)),
                         ))
+
+                        # Let's print a table where the first column corresponds to the job ID
+                        # and the second column lists the exit code, the derived exit code, the status
+                        # and the classification of the failed job
+                        logging.error("Error table:")
+                        for job_id in failed_jobs:
+                            sys.stderr.write("{jobId} {exitCode} {derivedExitCode} {state} {status}\n".format(
+                                jobId           = job_id,
+                                exitCode        = completion[job_id].exit_code,
+                                derivedExitCode = completion[job_id].derived_exit_code,
+                                state           = completion[job_id].state,
+                                status          = Status.toString(completion[job_id].status),
+                            ))
+
                         sys.stderr.write('%s\n' % text_line)
                         for failed_job in failed_jobs:
                             for log in zip(['wrapper', 'executable'], ['log_wrap', 'log_exec']):
-                                logfile = self.jobIds[failed_job][log[1]]
+                                logfile = self.submittedJobs[failed_job][log[1]]
                                 if os.path.isfile(logfile):
                                     logfile_contents = open(logfile, 'r').read()
                                 else:
@@ -488,9 +625,29 @@ class sbatchManager:
                                     path        = logfile,
                                     log         = logfile_contents,
                                     line        = text_line,
-                                ))
-                        # Raise the first error at hand
-                        raise Status.raiseError(errors[0])
+                                  )
+                                )
+
+                            if self.submittedJobs[failed_job]['nof_submissions'] < self.max_resubmissions and \
+                               completion[failed_job].status == Status.io_error:
+                                # The job is eligible for resubmission if the job hasn't been resubmitted more
+                                # than a preset limit of resubmissions AND if the job failed due to I/O errors
+                                logging.warning(
+                                    "Job w/ ID {id} and arguments {args} FAILED because: {reason} "
+                                    "-> resubmission attempt #{attempt}".format(
+                                        id      = failed_job,
+                                        args    = self.submittedJobs[failed_job]['args'],
+                                        reason  = Status.toString(completion[failed_job].status),
+                                        attempt = self.submittedJobs[failed_job]['nof_submissions'],
+                                    )
+                                )
+                                self.submitJob(*self.submittedJobs[failed_job]['args'])
+                                # The old ID must be deleted, b/c otherwise it would be used to compare against
+                                # squeue output and we would resubmit the failed job ad infinitum
+                                del self.submittedJobs[failed_job]
+                            else:
+                                # We've exceeded the maximum number of resubmissions -> fail the workflow
+                                raise Status.raiseError(completion[failed_job].status)
                     else:
                         logging.debug("Job(s) w/ ID(s) {completedIds} finished successfully {runningInfo}".format(
                           completedIds = ','.join(completed_jobs),
@@ -498,13 +655,47 @@ class sbatchManager:
                         ))
                     # Mark successfully finished jobs as completed so that won't request their status code again
                     # Otherwise they will be still at ,,submitted'' state
-                    for id_ in completed_jobs:
-                        self.jobIds[id_]['status'] = Status.completed
+                    for job_id in completed_jobs:
+                        if not all(map(
+                            lambda outputFile: is_file_ok(
+                                outputFile, validate_outputs = True, min_file_size = self.min_file_size
+                            ),
+                            self.submittedJobs[job_id]['outputFiles']
+                          )):
+                            if self.submittedJobs[job_id]['nof_submissions'] < self.max_resubmissions:
+                                logging.warning(
+                                    "Job w/ ID {id} and arguments {args} FAILED to produce a valid output file "
+                                    "-> resubmission attempt #{attempt}".format(
+                                        id      = job_id,
+                                        args    = self.submittedJobs[job_id]['args'],
+                                        attempt = self.submittedJobs[job_id]['nof_submissions'],
+                                    )
+                                )
+                                self.submitJob(*self.submittedJobs[job_id]['args'])
+                                del self.submittedJobs[job_id]
+                            else:
+                                raise ValueError(
+                                    "Job w/ ID {id} FAILED because it repeatedly produces bogus output "
+                                    "file {output} yet the job still exits w/o any errors".format(
+                                        id     = job_id,
+                                        output = ', '.join(self.submittedJobs[job_id]['outputFiles']),
+                                    )
+                                )
+                        else:
+                            # Job completed just fine
+                            self.submittedJobs[job_id]['status'] = Status.completed
 
-            jobIds_set = set([ id_ for id_ in self.jobIds if self.jobIds[id_]['status'] == Status.submitted])
-            nofJobs_left = len(jobIds_set)
+            jobIds_set = set([
+                job_id for job_id in self.submittedJobs if self.submittedJobs[job_id]['status'] == Status.submitted
+            ])
+            nofJobs_left = len(jobIds_set) + len(self.queuedJobs)
             if nofJobs_left > 0:
-                time.sleep(self.poll_interval)
+                two_pow_sixteen = 65536
+                random.seed((abs(hash(uuid.uuid4()))) % two_pow_sixteen)
+                max_delay = 300
+                random_delay = random.randint(0, max_delay)
+                logging.debug("sleeping for %i seconds." % random_delay)
+                time.sleep(self.poll_interval + random_delay)
             else:
                 break
             logging.info("Waiting for sbatch to finish (%d job(s) still left) ..." % nofJobs_left)

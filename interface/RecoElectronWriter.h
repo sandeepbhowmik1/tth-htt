@@ -1,45 +1,65 @@
 #ifndef tthAnalysis_HiggsToTauTau_RecoElectronWriter_h
 #define tthAnalysis_HiggsToTauTau_RecoElectronWriter_h
 
-#include "tthAnalysis/HiggsToTauTau/interface/RecoElectron.h" // RecoElectron
-#include "tthAnalysis/HiggsToTauTau/interface/RecoLeptonWriter.h" // RecoLeptonWriter
+#include <Rtypes.h> // *_t
 
-#include <Rtypes.h> // Int_t, Float_t
-#include <TTree.h> // TTree
+#include <string> // std::string
+#include <vector> // std::vector<>
+#include <map> // std::map<,>
 
-#include <string>
-#include <vector>
+// forward declarations
+class TTree;
+class RecoElectron;
+class RecoLeptonWriter;
+enum class EGammaID;
+enum class EGammaWP;
 
 class RecoElectronWriter
 {
- public:
-  RecoElectronWriter(int era);
-  RecoElectronWriter(int era, const std::string& branchName_num, const std::string& branchName_obj); 
+public:
+  RecoElectronWriter(int era,
+                     bool isMC);
+  RecoElectronWriter(int era,
+                     bool isMC,
+                     const std::string & branchName_obj);
+  RecoElectronWriter(int era,
+                     bool isMC,
+                     const std::string & branchName_num,
+                     const std::string & branchName_obj);
   ~RecoElectronWriter();
 
   /**
    * @brief Call tree->Branch for all lepton branches specific to RecoElectrons
    */
-  void setBranches(TTree* tree);
+  void
+  setBranches(TTree * tree);
 
   /**
    * @brief Write branches specific to RecoElectrons to tree
    */
-  void write(const std::vector<const RecoElectron*>& leptons);
-  
- protected: 
+  void
+  write(const std::vector<const RecoElectron *>& leptons);
+
+  void
+  writeUncorrected(bool flag);
+
+protected:
  /**
-   * @brief Initialize names of branches to be read from tree
+   * @brief Initialize names of branches to be written to tree
    */
-  void setBranchNames();
+  void
+  setBranchNames();
+
+  int era_;
 
   std::string branchName_num_;
   std::string branchName_obj_;
 
-  RecoLeptonWriter* leptonWriter_;
+  bool writeUncorrected_;
 
-  std::string branchName_mvaRawPOG_GP_; 
-  std::string branchName_mvaRawPOG_HZZ_; 
+  RecoLeptonWriter * leptonWriter_;
+
+  std::string branchName_eCorr_;
   std::string branchName_sigmaEtaEta_;
   std::string branchName_HoE_;
   std::string branchName_deltaEta_;
@@ -47,16 +67,23 @@ class RecoElectronWriter
   std::string branchName_OoEminusOoP_;
   std::string branchName_lostHits_;
   std::string branchName_conversionVeto_;
+  std::string branchName_cutbasedID_HLT_;
 
-  Float_t* mvaRawPOG_GP_; 
-  Float_t* mvaRawPOG_HZZ_; 
-  Float_t* sigmaEtaEta_;
-  Float_t* HoE_;
-  Float_t* deltaEta_;
-  Float_t* deltaPhi_;
-  Float_t* OoEminusOoP_;
-  Int_t* lostHits_; 
-  Int_t* conversionVeto_;
+  std::map<EGammaID, std::string> branchNames_mvaRaw_POG_;
+  std::map<EGammaID, std::map<EGammaWP, std::string>> branchNames_mvaID_POG_;
+
+  Float_t * eCorr_;
+  Float_t * sigmaEtaEta_;
+  Float_t * HoE_;
+  Float_t * deltaEta_;
+  Float_t * deltaPhi_;
+  Float_t * OoEminusOoP_;
+  UChar_t * lostHits_;
+  Bool_t * conversionVeto_;
+  Int_t * cutbasedID_HLT_;
+
+  std::map<EGammaID, Float_t *> rawMVAs_POG_;
+  std::map<EGammaID, std::map<EGammaWP, Bool_t *>> mvaIDs_POG_;
 };
 
 #endif // tthAnalysis_HiggsToTauTau_RecoElectronWriter_h

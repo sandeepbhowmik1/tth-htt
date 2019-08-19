@@ -1,69 +1,142 @@
 #ifndef tthAnalysis_HiggsToTauTau_RecoLeptonWriter_h
 #define tthAnalysis_HiggsToTauTau_RecoLeptonWriter_h
 
-#include "tthAnalysis/HiggsToTauTau/interface/RecoLepton.h" // RecoLepton
+#include "tthAnalysis/HiggsToTauTau/interface/GenParticleWriter.h" // GenParticleWriter
+#include "tthAnalysis/HiggsToTauTau/interface/GenLepton.h" // GenLepton
+#include "tthAnalysis/HiggsToTauTau/interface/GenHadTau.h" // GenHadTau
+#include "tthAnalysis/HiggsToTauTau/interface/GenPhoton.h" // GenPhoton
+#include "tthAnalysis/HiggsToTauTau/interface/GenJet.h" // GenJet
 
-#include <Rtypes.h> // Int_t, Float_t
-#include <TTree.h> // TTree
+#include <string> // std::string
+#include <vector> // std::vector<>
+#include <map> // std::map<,>
 
-#include <string>
-#include <vector>
+// forward declaration
+class TTree;
+enum class Btag;
 
 class RecoLeptonWriter
 {
- public:
-  RecoLeptonWriter(const std::string& branchName_num, const std::string& branchName_obj);
+public:
+  RecoLeptonWriter(bool isMC,
+                   const std::string & branchName_obj);
+  RecoLeptonWriter(bool isMC,
+                   const std::string & branchName_num,
+                   const std::string & branchName_obj);
   ~RecoLeptonWriter();
 
   /**
    * @brief Call tree->Branch for all lepton branches common to RecoElectrons and RecoMuons
    */
-  void setBranches(TTree* tree);
+  void setBranches(TTree * tree);
 
   /**
    * @brief Write branches common to RecoElectrons and RecoMuons to tree
    */
   template<typename T>
-  void write(const std::vector<const T*>& leptons)
+  void write(const std::vector<const T *> & leptons,
+             Double_t * eCorrs = nullptr)
   {
     nLeptons_ = leptons.size();
-    for ( Int_t idxLepton = 0; idxLepton < nLeptons_; ++idxLepton ) {
-      const T* lepton = leptons[idxLepton];
+    for(UInt_t idxLepton = 0; idxLepton < nLeptons_; ++idxLepton)
+    {
+      const T * lepton = leptons[idxLepton];
       assert(lepton);
-      pt_[idxLepton] = lepton->lepton_pt();
+      const double eCorr = eCorrs ? eCorrs[idxLepton] : 1.;
+      pt_[idxLepton] = lepton->lepton_pt() * eCorr;
       eta_[idxLepton] = lepton->eta();
       phi_[idxLepton] = lepton->phi();
       mass_[idxLepton] = lepton->mass();
       pdgId_[idxLepton] = lepton->pdgId();
       dxy_[idxLepton] = lepton->dxy();
       dz_[idxLepton] = lepton->dz();
-      relIso_[idxLepton] = lepton->relIso();
-      chargedHadRelIso03_[idxLepton] = lepton->chargedHadRelIso03();
-      miniIsoCharged_[idxLepton] = lepton->miniIsoCharged();
-      miniIsoNeutral_[idxLepton] = lepton->miniIsoNeutral();
+      relIso_all_[idxLepton] = lepton->relIso();
+      pfRelIso04_all_[idxLepton] = lepton->pfRelIso04All();
+      relIso_chg_[idxLepton] = lepton->miniRelIsoCharged();
+      relIso_neu_[idxLepton] = lepton->miniRelIsoNeutral();
       sip3d_[idxLepton] = lepton->sip3d();
       mvaRawTTH_[idxLepton] = lepton->mvaRawTTH();
-      jetNDauChargedMVASel_[idxLepton] = lepton->jetNDauChargedMVASel();
-      jetPtRel_[idxLepton] = lepton->jetPtRel();
       jetPtRatio_[idxLepton] = lepton->jetPtRatio();
-      jetBtagCSV_[idxLepton] = lepton->jetBtagCSV();
+      jetPtRel_[idxLepton] = lepton->jetPtRel();
+      for(const auto & kv: branchNames_jetBtagCSV_)
+      {
+        jetBtagCSVs_[kv.first][idxLepton] = lepton->jetBtagCSV(kv.first);
+      }
+      jetNDauChargedMVASel_[idxLepton] = lepton->jetNDauChargedMVASel();
       tightCharge_[idxLepton] = lepton->tightCharge();
       charge_[idxLepton] = lepton->charge();
+      filterBits_[idxLepton] = lepton->filterBits();
+      jetIdx_[idxLepton] = lepton->jetIdx();
+      if(isMC_)
+      {
+        genPartFlav_[idxLepton] = lepton->genPartFlav();
+        genMatchIdx_[idxLepton] = lepton->genMatchIdx();
+      }
     }
+    if(isMC_)
+    {
+      writeGenMatching(leptons);
+    }
+  }
+
+  /**
+   * @brief Write branches containing information on matching of RecoElectrons and RecoMuons 
+   *        to generator level electrons, muons, hadronic taus, and jets to tree
+   */
+  template<typename T>
+  void writeGenMatching(const std::vector<const T *> & leptons)
+  {
+    assert(isMC_);
+    std::vector<GenParticle> matched_genLeptons;
+    std::vector<GenParticle> matched_genHadTaus;
+    std::vector<GenParticle> matched_genPhotons;
+    std::vector<GenParticle> matched_genJets;
+    assert(nLeptons_ == leptons.size());
+    for(const T * lepton: leptons)
+    {
+      assert(lepton);
+      const GenLepton * matched_genLepton = lepton->genLepton();
+      if(matched_genLepton) matched_genLeptons.push_back(static_cast<GenParticle>(*matched_genLepton));
+      else                  matched_genLeptons.push_back(dummyGenParticle_);
+
+      const GenHadTau * matched_genHadTau = lepton->genHadTau();
+      if(matched_genHadTau) matched_genHadTaus.push_back(static_cast<GenParticle>(*matched_genHadTau));
+      else                  matched_genHadTaus.push_back(dummyGenParticle_);
+
+      const GenPhoton * matched_genPhoton = lepton->genPhoton();
+      if(matched_genPhoton) matched_genPhotons.push_back(static_cast<GenParticle>(*matched_genPhoton));
+      else                  matched_genPhotons.push_back(dummyGenParticle_);
+
+      const GenJet * matched_genJet = lepton->genJet();
+      if(matched_genJet) matched_genJets.push_back(static_cast<GenParticle>(*matched_genJet));
+      else               matched_genJets.push_back(dummyGenParticle_);
+    }
+    genLeptonWriter_->write(matched_genLeptons);
+    genHadTauWriter_->write(matched_genHadTaus);
+    genPhotonWriter_->write(matched_genPhotons);
+    genJetWriter_->write(matched_genJets);
   }
 
   friend class RecoElectronWriter;
   friend class RecoMuonWriter;
 
- protected:
+protected:
  /**
    * @brief Initialize names of branches to be read from tree
    */
-  void setBranchNames();
+  void
+  setBranchNames();
 
-  const int max_nLeptons_;
+  const unsigned int max_nLeptons_;
   std::string branchName_num_;
   std::string branchName_obj_;
+  bool isMC_;
+
+  GenParticleWriter * genLeptonWriter_;
+  GenParticleWriter * genHadTauWriter_;
+  GenParticleWriter * genPhotonWriter_;
+  GenParticleWriter * genJetWriter_;
+  GenParticle dummyGenParticle_;
 
   std::string branchName_pt_;
   std::string branchName_eta_;
@@ -72,39 +145,49 @@ class RecoLeptonWriter
   std::string branchName_pdgId_;
   std::string branchName_dxy_;
   std::string branchName_dz_;
-  std::string branchName_relIso_;
-  std::string branchName_chargedHadRelIso03_;
-  std::string branchName_miniIsoCharged_;
-  std::string branchName_miniIsoNeutral_;
+  std::string branchName_relIso_all_;
+  std::string branchName_pfRelIso04_all_;
+  std::string branchName_relIso_chg_;
+  std::string branchName_relIso_neu_;
   std::string branchName_sip3d_;
   std::string branchName_mvaRawTTH_;
-  std::string branchName_jetNDauChargedMVASel_;
-  std::string branchName_jetPtRel_;
   std::string branchName_jetPtRatio_;
-  std::string branchName_jetBtagCSV_;
+  std::string branchName_jetPtRel_;
+  std::string branchName_jetNDauChargedMVASel_;
   std::string branchName_tightCharge_;
   std::string branchName_charge_;
+  std::string branchName_filterBits_;
+  std::string branchName_jetIdx_;
+  std::string branchName_genPartFlav_;
+  std::string branchName_genMatchIdx_;
 
-  Int_t nLeptons_;
-  Float_t* pt_;
-  Float_t* eta_;
-  Float_t* phi_;
-  Float_t* mass_;
-  Int_t* pdgId_;
-  Float_t* dxy_;
-  Float_t* dz_;
-  Float_t* relIso_;
-  Float_t* chargedHadRelIso03_;
-  Float_t* miniIsoCharged_;
-  Float_t* miniIsoNeutral_;
-  Float_t* sip3d_;
-  Float_t* mvaRawTTH_;
-  Float_t* jetNDauChargedMVASel_;
-  Float_t* jetPtRel_;
-  Float_t* jetPtRatio_;
-  Float_t* jetBtagCSV_;
-  Int_t* tightCharge_;
-  Int_t* charge_;
+  std::map<Btag, std::string> branchNames_jetBtagCSV_;
+
+  UInt_t nLeptons_;
+  Float_t * pt_;
+  Float_t * eta_;
+  Float_t * phi_;
+  Float_t * mass_;
+  Int_t * pdgId_;
+  Float_t * dxy_;
+  Float_t * dz_;
+  Float_t * relIso_all_;
+  Float_t * pfRelIso04_all_;
+  Float_t * relIso_chg_;
+  Float_t * relIso_neu_;
+  Float_t * sip3d_;
+  Float_t * mvaRawTTH_;
+  Float_t * jetPtRatio_;
+  Float_t * jetPtRel_;
+  Int_t * jetNDauChargedMVASel_;
+  Int_t * tightCharge_;
+  Int_t * charge_;
+  UInt_t * filterBits_;
+  Int_t * jetIdx_;
+  UChar_t * genPartFlav_;
+  Int_t * genMatchIdx_;
+
+  std::map<Btag, Float_t *> jetBtagCSVs_;
 };
 
 #endif // tthAnalysis_HiggsToTauTau_RecoLeptonWriter_h

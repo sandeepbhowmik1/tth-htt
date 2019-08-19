@@ -34,8 +34,17 @@ NB! The input file you provide can work only for a single MC sample or multiple 
     trigger.
 '''
 
-import logging, argparse, os, sys, re, ROOT, array, subprocess
-from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_2016 import samples_2016 as samples
+from tthAnalysis.HiggsToTauTau.samples.tthAnalyzeSamples_2017_preselected import samples_2017 as samples
+from tthAnalysis.HiggsToTauTau.safe_root import ROOT
+from tthAnalysis.HiggsToTauTau.common import logging, SmartFormatter
+from tthAnalysis.HiggsToTauTau.hdfs import hdfs
+
+import argparse
+import os
+import sys
+import re
+import array
+import subprocess
 
 def is_dict_full(d):
   '''Checks whether all values in a given dictionary are present
@@ -48,18 +57,6 @@ def is_dict_full(d):
   return len(filter(lambda x: x == '', d.values())) == 0
 
 if __name__ == '__main__':
-  logging.basicConfig(
-    stream = sys.stdout,
-    level  = logging.INFO,
-    format = '%(asctime)s - %(levelname)s: %(message)s'
-  )
-
-  class SmartFormatter(argparse.HelpFormatter):
-    def _split_lines(self, text, width):
-      if text.startswith('R|'):
-        return text[2:].splitlines()
-      return argparse.HelpFormatter._split_lines(self, text, width)
-
   parser = argparse.ArgumentParser(formatter_class = lambda prog: SmartFormatter(prog, max_help_position = 40))
   parser.add_argument('-s', '--sample-name', metavar = 'name', required = True, type = str,
                       help = 'R|Sample name (may be a regex)')
@@ -92,19 +89,19 @@ if __name__ == '__main__':
   if grep_individually and not grep_directory:
     logging.warning('Option -a/--all has no effect unless you specify -d/--directory')
 
-  if not os.path.isfile(rle_file):
+  if not hdfs.isfile(rle_file):
     logging.error("No such file: '{rle_filename}'".format(
       rle_filename = rle_file,
     ))
     sys.exit(1)
 
-  if output_file and not os.path.isdir(os.path.dirname(output_file)):
+  if output_file and not hdfs.isdir(os.path.dirname(output_file)):
     logging.error("Parent directory of '{output_file}' doesn't exist".format(
       output_file = output_file,
     ))
     sys.exit(1)
 
-  if grep_directory and not os.path.isdir(grep_directory):
+  if grep_directory and not hdfs.isdir(grep_directory):
     logging.error("Grep directory '{grep_directory}' doesn't exist".format(
       grep_directory = grep_directory,
     ))
@@ -135,7 +132,7 @@ if __name__ == '__main__':
         ))
         sys.exit(1)
 
-      rles[line] = ''
+      rles[line] = []
 
   # here we try to grep RLE numbers instead of looping over ROOT files
   rle_matched_files = []
@@ -148,7 +145,7 @@ if __name__ == '__main__':
     if grep_directory:
 
       grep_subdir = os.path.join(grep_directory, sample_keys[sample_key])
-      if not os.path.isdir(grep_subdir):
+      if not hdfs.isdir(grep_subdir):
         logging.error("No such directory: '{grep_subdir}'".format(grep_subdir=grep_subdir))
         sys.exit(1)
       logging.debug('Grepping from {grep_dir}'.format(grep_dir=grep_subdir))
@@ -211,51 +208,36 @@ if __name__ == '__main__':
           grep_result = os.path.join(
             sample_path, '000%d' % (file_idx / 1000), 'tree_{i}.root'.format(i = file_idx)
           )
-          rles[rle] = grep_result
-          if is_dict_full(rles): break
+          rles[rle].append(grep_result)
     else:
       # instead of forming a list of files let's loop over the subfolders and the files therein instead
       logging.debug('Looping over the files in {sample_path}'.format(sample_path = sample_path))
-      for subdir_basename in os.listdir(sample_path):
-        subdir = os.path.join(sample_path, subdir_basename)
+      for subdir in hdfs.listdir(sample_path):
         logging.debug('Found subdirectory {subdir}'.format(subdir = subdir))
-        for rootfile_basename in os.listdir(subdir):
-          rootfile = os.path.join(subdir, rootfile_basename)
+        for rootfile in hdfs.listdir(subdir):
           logging.debug("Processing file '{rootfile}'".format(
             rootfile = rootfile,
           ))
 
           # open the file
-          ch_root = ROOT.TChain("tree")
+          ch_root = ROOT.TChain("Events")
           ch_root.AddFile(rootfile)
 
           run_a  = array.array('I', [0])
           lumi_a = array.array('I', [0])
           evt_a  = array.array('L', [0])
 
-          ch_root.SetBranchAddress("run",  run_a)
-          ch_root.SetBranchAddress("lumi", lumi_a)
-          ch_root.SetBranchAddress("evt",  evt_a)
+          ch_root.SetBranchAddress("run",             run_a)
+          ch_root.SetBranchAddress("luminosityBlock", lumi_a)
+          ch_root.SetBranchAddress("event",           evt_a)
 
           nof_entries = ch_root.GetEntries()
           for i in range(nof_entries):
             ch_root.GetEntry(i)
             rle_i = ':'.join(map(str, [run_a[0], lumi_a[0], evt_a[0]]))
             if rle_i in rles:
-              if rles[rle_i]:
-                logging.error("Something's wrong: files {first_file} and {second_file} contain "
-                              "the same RLE number".format(
-                  first_file = rles[rle_i],
-                  second_file = rootfile,
-                ))
-                sys.exit(1)
-              rles[rle_i] = rootfile
-              logging.debug("Got a match '{rle_number}'".format(
-                rle_number = rle_i
-              ))
-              if is_dict_full(rles): break
-          if is_dict_full(rles): break
-        if is_dict_full(rles): break
+              rles[rle_i].append(rootfile)
+              logging.debug("Got a match '{rle_number}'".format(rle_number = rle_i))
 
   xor = lambda lhs, rhs: bool(lhs) ^ bool(rhs)
   if not xor(grep_directory, grep_individually):
@@ -266,10 +248,14 @@ if __name__ == '__main__':
           missing_rles.append(rle_i)
       logging.error("There are still some RLE numbers left for which no ROOT file was found: "
                     "{rle_list}".format(
-        rle_list = ", ".join(missing_rles),
+        rle_list = "\n".join(missing_rles),
       ))
     # let's make the list of matched ROOT files unique
-    rle_matched_files = list(set(filter(lambda x: x != '', rles.values())))
+    rle_matched_files = []
+    for rle_arr in rles.values():
+      for rle_v in rle_arr:
+        if rle_v not in rle_matched_files:
+          rle_matched_files.append(rle_v)
     logging.debug('Found {nof_matches} matches'.format(nof_matches = len(rle_matched_files)))
 
   logging.debug("Got matches for the following files:")

@@ -1,36 +1,29 @@
 #include "tthAnalysis/HiggsToTauTau/interface/GenParticleReader.h" // GenParticleReader
 
-#include "FWCore/Utilities/interface/Exception.h"
-
-#include <TString.h> // Form
+#include "tthAnalysis/HiggsToTauTau/interface/cmsException.h" // cmsException()
+#include "tthAnalysis/HiggsToTauTau/interface/BranchAddressInitializer.h" // BranchAddressInitializer, TTree, Form()
 
 std::map<std::string, int> GenParticleReader::numInstances_;
-std::map<std::string, GenParticleReader*> GenParticleReader::instances_;
+std::map<std::string, GenParticleReader *> GenParticleReader::instances_;
 
 GenParticleReader::GenParticleReader()
-  : max_nParticles_(32)
-  , branchName_nParticles_("nGenLep")
-  , branchName_particles_("GenLep")
-  , particle_pt_(0)
-  , particle_eta_(0)
-  , particle_phi_(0)
-  , particle_mass_(0)
-  , particle_pdgId_(0)
-  , particle_charge_(0)
-{
-  setBranchNames();
-}
+  : GenParticleReader("GenPart")
+{}
 
-GenParticleReader::GenParticleReader(const std::string& branchName_nParticles, const std::string& branchName_particles)
+GenParticleReader::GenParticleReader(const std::string & branchName_particles)
   : max_nParticles_(32)
-  , branchName_nParticles_(branchName_nParticles)
+  , branchName_nParticles_(Form("n%s", branchName_particles.data()))
   , branchName_particles_(branchName_particles)
-  , particle_pt_(0)
-  , particle_eta_(0)
-  , particle_phi_(0)
-  , particle_mass_(0)
-  , particle_pdgId_(0)
-  , particle_charge_(0)
+  , readGenPartFlav_(false)
+  , particle_pt_(nullptr)
+  , particle_eta_(nullptr)
+  , particle_phi_(nullptr)
+  , particle_mass_(nullptr)
+  , particle_pdgId_(nullptr)
+  , particle_charge_(nullptr)
+  , particle_status_(nullptr)
+  , particle_statusFlags_(nullptr)
+  , particle_genPartFlav_(nullptr)
 {
   setBranchNames();
 }
@@ -39,8 +32,10 @@ GenParticleReader::~GenParticleReader()
 {
   --numInstances_[branchName_particles_];
   assert(numInstances_[branchName_particles_] >= 0);
-  if ( numInstances_[branchName_particles_] == 0 ) {
-    GenParticleReader* gInstance = instances_[branchName_particles_];
+
+  if(numInstances_[branchName_particles_] == 0)
+  {
+    GenParticleReader * const gInstance = instances_[branchName_particles_];
     assert(gInstance);
     delete[] gInstance->particle_pt_;
     delete[] gInstance->particle_eta_;
@@ -48,77 +43,101 @@ GenParticleReader::~GenParticleReader()
     delete[] gInstance->particle_mass_;
     delete[] gInstance->particle_pdgId_;
     delete[] gInstance->particle_charge_;
-    instances_[branchName_particles_] = 0;
+    delete[] gInstance->particle_status_;
+    delete[] gInstance->particle_statusFlags_;
+    delete[] gInstance->particle_genPartFlav_;
+    instances_[branchName_particles_] = nullptr;
   }
 }
 
-void GenParticleReader::setBranchNames()
+void
+GenParticleReader::readGenPartFlav(bool flag)
 {
-  if ( numInstances_[branchName_particles_] == 0 ) {
+  readGenPartFlav_ = flag;
+}
+
+void
+GenParticleReader::setBranchNames()
+{
+  if(numInstances_[branchName_particles_] == 0)
+  {
     branchName_particle_pt_ = Form("%s_%s", branchName_particles_.data(), "pt");
     branchName_particle_eta_ = Form("%s_%s", branchName_particles_.data(), "eta");
     branchName_particle_phi_ = Form("%s_%s", branchName_particles_.data(), "phi");
     branchName_particle_mass_ = Form("%s_%s", branchName_particles_.data(), "mass");
     branchName_particle_pdgId_ = Form("%s_%s", branchName_particles_.data(), "pdgId");
     branchName_particle_charge_ = Form("%s_%s", branchName_particles_.data(), "charge");
+    branchName_particle_status_ = Form("%s_%s", branchName_particles_.data(), "status");
+    branchName_particle_statusFlags_ = Form("%s_%s", branchName_particles_.data(), "statusFlags");
+    branchName_particle_genPartFlav_ = Form("%s_%s", branchName_particles_.data(), "genPartFlav");
     instances_[branchName_particles_] = this;
-  } else {
-    GenParticleReader* gInstance = instances_[branchName_particles_];
+  }
+  else
+  {
+    const GenParticleReader * const gInstance = instances_[branchName_particles_];
     assert(gInstance);
-    if ( branchName_nParticles_ != gInstance->branchName_nParticles_ ) {
-      throw cms::Exception("GenParticleReader") 
-	<< "Association between configuration parameters 'branchName_nParticles' and 'branchName_particles' must be unique:"
-	<< " present association 'branchName_nParticles' = " << branchName_nParticles_ << "," 
-	<< " with 'branchName_particles' = " << branchName_particles_ 
-	<< " does not match previous association 'branchName_nParticles' = " << gInstance->branchName_nParticles_ << "," 
-	<< " with 'branchName_particles' = " << gInstance->branchName_particles_ << " !!\n";
+    if(branchName_nParticles_ != gInstance->branchName_nParticles_)
+    {
+      throw cmsException(this)
+        << "Association between configuration parameters 'branchName_nParticles' and 'branchName_particles' must be unique:"
+        << " present association 'branchName_nParticles' = " << branchName_nParticles_ << ","
+        << " with 'branchName_particles' = " << branchName_particles_
+        << " does not match previous association 'branchName_nParticles' = " << gInstance->branchName_nParticles_ << ","
+        << " with 'branchName_particles' = " << gInstance->branchName_particles_ << " !!\n";
     }
   }
   ++numInstances_[branchName_particles_];
 }
 
-void GenParticleReader::setBranchAddresses(TTree* tree)
+void
+GenParticleReader::setBranchAddresses(TTree * tree)
 {
-  if ( instances_[branchName_particles_] == this ) {
-    tree->SetBranchAddress(branchName_nParticles_.data(), &nParticles_);   
-    particle_pt_ = new Float_t[max_nParticles_];
-    tree->SetBranchAddress(branchName_particle_pt_.data(), particle_pt_); 
-    particle_eta_ = new Float_t[max_nParticles_];
-    tree->SetBranchAddress(branchName_particle_eta_.data(), particle_eta_); 
-    particle_phi_ = new Float_t[max_nParticles_];
-    tree->SetBranchAddress(branchName_particle_phi_.data(), particle_phi_); 
-    particle_mass_ = new Float_t[max_nParticles_];
-    tree->SetBranchAddress(branchName_particle_mass_.data(), particle_mass_); 
-    particle_pdgId_ = new Int_t[max_nParticles_];
-    tree->SetBranchAddress(branchName_particle_pdgId_.data(), particle_pdgId_); 
-    particle_charge_ = new Float_t[max_nParticles_];
-    tree->SetBranchAddress(branchName_particle_charge_.data(), particle_charge_); 
+  if(instances_[branchName_particles_] == this)
+  {
+    BranchAddressInitializer bai(tree, max_nParticles_);
+    bai.setBranchAddress(nParticles_, branchName_nParticles_);
+    bai.setBranchAddress(particle_pt_, branchName_particle_pt_);
+    bai.setBranchAddress(particle_eta_, branchName_particle_eta_);
+    bai.setBranchAddress(particle_phi_, branchName_particle_phi_);
+    bai.setBranchAddress(particle_mass_, branchName_particle_mass_);
+    bai.setBranchAddress(particle_pdgId_, branchName_particle_pdgId_);
+    bai.setBranchAddress(particle_charge_, branchName_particle_charge_);
+    bai.setBranchAddress(particle_status_, branchName_particle_status_);
+    bai.setBranchAddress(particle_genPartFlav_, readGenPartFlav_ ? branchName_particle_genPartFlav_ : "");
+    bai.setBranchAddress(particle_statusFlags_, branchName_particle_statusFlags_);
   }
 }
 
-std::vector<GenParticle> GenParticleReader::read() const
+std::vector<GenParticle>
+GenParticleReader::read() const
 {
-  //std::cout << "<GenParticleReader::read()>:" << std::endl;
-  GenParticleReader* gInstance = instances_[branchName_particles_];
+  const GenParticleReader * const gInstance = instances_[branchName_particles_];
   assert(gInstance);
-  Int_t nParticles = gInstance->nParticles_;
-  //std::cout << "nParticles = " << nParticles << std::endl;
+
+  const UInt_t nParticles = gInstance->nParticles_;
   if ( nParticles > max_nParticles_ ) {
-    throw cms::Exception("GenParticleReader") 
+    throw cmsException(this)
       << "Number of particles stored in Ntuple = " << nParticles << "," 
-      << " exceeds max_nParticles = " << max_nParticles_ << " !!\n";
+         " exceeds max_nParticles = " << max_nParticles_ << " !!\n";
   }
+
   std::vector<GenParticle> particles;
-  if ( nParticles > 0 ) {
+  if(nParticles > 0)
+  {
     particles.reserve(nParticles);
-    for ( Int_t idxParticle = 0; idxParticle < nParticles; ++idxParticle ) {
-      particles.push_back(GenParticle({ 
+    for(UInt_t idxParticle = 0; idxParticle < nParticles; ++idxParticle)
+    {
+      particles.push_back({
         gInstance->particle_pt_[idxParticle],
         gInstance->particle_eta_[idxParticle],
         gInstance->particle_phi_[idxParticle],
         gInstance->particle_mass_[idxParticle],
         gInstance->particle_pdgId_[idxParticle],
-        gInstance->particle_charge_[idxParticle] }));
+        gInstance->particle_charge_[idxParticle],
+        gInstance->particle_status_[idxParticle],
+        gInstance->particle_statusFlags_[idxParticle],
+        gInstance->particle_genPartFlav_[idxParticle],
+      });
     }
   } 
   return particles;

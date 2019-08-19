@@ -2,39 +2,43 @@
 #define tthAnalysis_HiggsToTauTau_GenHadTauReader_h
 
 #include "tthAnalysis/HiggsToTauTau/interface/GenHadTau.h" // GenHadTau
+#include "tthAnalysis/HiggsToTauTau/interface/ReaderBase.h" // ReaderBase
 
-#include <Rtypes.h> // Int_t, Float_t
-#include <TTree.h> // TTree
+#include <map> // std::map<,>
 
-#include <string>
-#include <vector>
-#include <map>
+// forward declarations
+class TTree;
 
 class GenHadTauReader
+  : public ReaderBase
 {
- public:
-  GenHadTauReader();
-  GenHadTauReader(const std::string& branchName_num, const std::string& branchName_obj); 
+public:
+  GenHadTauReader(unsigned int max_nHadTaus = 36);
+  GenHadTauReader(const std::string & branchName_obj,
+                  unsigned int max_nHadTaus = 36);
   ~GenHadTauReader();
 
   /**
    * @brief Call tree->SetBranchAddress for all GenHadTau branches
    */
-  void setBranchAddresses(TTree* tree);
+  void
+  setBranchAddresses(TTree * tree) override;
 
   /**
    * @brief Read branches from tree and use information to fill collection of GenHadTau objects
    * @return Collection of GenHadTau objects
    */
-  std::vector<GenHadTau> read() const;
-  
- protected: 
+  std::vector<GenHadTau>
+  read() const;
+
+protected:
  /**
    * @brief Initialize names of branches to be read from tree
    */
-  void setBranchNames();
+  void
+  setBranchNames();
 
-  const int max_nHadTaus_;
+  const unsigned int max_nHadTaus_;
   std::string branchName_num_;
   std::string branchName_obj_;
 
@@ -43,13 +47,15 @@ class GenHadTauReader
   std::string branchName_phi_;
   std::string branchName_mass_;
   std::string branchName_charge_;
+  std::string branchName_status_;
 
-  Int_t nHadTaus_;
-  Float_t* hadTau_pt_;
-  Float_t* hadTau_eta_;
-  Float_t* hadTau_phi_;
-  Float_t* hadTau_mass_;
-  Float_t* hadTau_charge_;
+  UInt_t nHadTaus_;
+  Float_t * hadTau_pt_;
+  Float_t * hadTau_eta_;
+  Float_t * hadTau_phi_;
+  Float_t * hadTau_mass_;
+  Int_t * hadTau_charge_;
+  Int_t * hadTau_status_;
 
   // CV: make sure that only one GenHadTauReader instance exists for a given branchName,
   //     as ROOT cannot handle multiple TTree::SetBranchAddress calls for the same branch.

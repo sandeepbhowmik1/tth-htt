@@ -1,113 +1,122 @@
 #include "tthAnalysis/HiggsToTauTau/interface/HadTopTagger.h" // HadTopTagger
 
-#include "FWCore/Utilities/interface/Exception.h" // cms::Exception
+#include "tthAnalysis/HiggsToTauTau/interface/TMVAInterface.h" // TMVAInterface
+#include "tthAnalysis/HiggsToTauTau/interface/hadTopTaggerAuxFunctions_internal.h" // isGenMatchedJetTriplet()
+#include "tthAnalysis/HiggsToTauTau/interface/hadTopTaggerAuxFunctions_geral.h" // kGen*
 
-#include "tthAnalysis/HiggsToTauTau/interface/Particle.h" // Particle::LorentzVector
-#include "tthAnalysis/HiggsToTauTau/interface/mvaAuxFunctions.h" // check_mvaInputs
+#include <DataFormats/Math/interface/deltaR.h> // deltaR()
 
-HadTopTagger::HadTopTagger(const std::string& mvaFileName)
-  : kinFit_(0),
-    mva_(0),
-    mvaOutput_(-1.)
+HadTopTagger::HadTopTagger(void)
+  : mva_xgb_HTT_CSVsort4rd_(nullptr)
 {
-  kinFit_ = new HadTopKinFit();
+  const std::string mvaFileNameHTT_CSVsort4rd =
+    "tthAnalysis/HiggsToTauTau/data/BDTs_2017MC_postPAS/HTT_HadTopTagger_2017_nomasscut_nvar17_resolved.xml"
+  ;
 
-  mvaInputVariables_.push_back("m_bWj1Wj2");
-  mvaInputVariables_.push_back("m_Wj1Wj2");
-  mvaInputVariables_.push_back("m_bWj1");
-  mvaInputVariables_.push_back("m_bWj2");
-  mvaInputVariables_.push_back("m_Wj1Wj2_div_m_bWj1Wj2");
-  mvaInputVariables_.push_back("CSV_b");
-  mvaInputVariables_.push_back("CSV_Wj1");
-  mvaInputVariables_.push_back("CSV_Wj2");
-  mvaInputVariables_.push_back("pT_b");
-  mvaInputVariables_.push_back("pT_Wj1");
-  mvaInputVariables_.push_back("pT_Wj2");
-  mvaInputVariables_.push_back("dR_bWj1");
-  mvaInputVariables_.push_back("dR_bWj2");
-  mvaInputVariables_.push_back("dR_Wj1Wj2");
-  mvaInputVariables_.push_back("dR_bW");
-  mvaInputVariables_.push_back("statusKinFit");
-  mvaInputVariables_.push_back("nllKinFit");
-  mvaInputVariables_.push_back("alphaKinFit");
-  mvaInputVariables_.push_back("logPKinFit");
-  mvaInputVariables_.push_back("logPErrKinFit");
-  mvaInputVariables_.push_back("qg_b");
-  mvaInputVariables_.push_back("qg_Wj1");
-  mvaInputVariables_.push_back("qg_Wj2");
-  mvaInputVariables_.push_back("pT_bWj1Wj2");
-  mvaInputVariables_.push_back("pT_Wj1Wj2");
-  mvaInputVariables_.push_back("max_dR_div_expRjet");
-  if ( mvaFileName != "" ) {
-    mva_ = new TMVAInterface(mvaFileName, mvaInputVariables_, {});
-  }
+  mvaInputsHTTSort =  {
+    "btagDisc_b",
+    "btagDisc_Wj1",
+    "btagDisc_Wj2",
+    "qg_Wj1",
+    "qg_Wj2",
+    "m_Wj1Wj2_div_m_bWj1Wj2",
+    "pT_Wj1Wj2",
+    "dR_Wj1Wj2",
+    "m_bWj1Wj2",
+    "dR_bW",
+    "m_bWj1",
+    "m_bWj2",
+    "mass_Wj1",
+    "pT_Wj2",
+    "mass_Wj2",
+    "pT_b",
+    "mass_b",
+  };
+  mva_xgb_HTT_CSVsort4rd_ = new TMVAInterface(
+    mvaFileNameHTT_CSVsort4rd, mvaInputsHTTSort
+  );
+  mva_xgb_HTT_CSVsort4rd_->enableBDTTransform();
 }
 
 HadTopTagger::~HadTopTagger()
 {
-  delete kinFit_;
-  delete mva_;
+  delete mva_xgb_HTT_CSVsort4rd_;
 }
 
-namespace
+std::map<int, double>
+HadTopTagger::operator()(const RecoJet & recBJet,
+                         const RecoJet & recWJet1,
+                         const RecoJet & recWJet2,
+                         bool & calculate_matching,
+                         bool & isGenMatched,
+                         double & genTopPt,
+                         const std::map<int, Particle::LorentzVector> & genVar,
+                         const std::map<int, Particle::LorentzVector> & genVarAnti)
 {
-  double max(double value1, double value2, double value3)
+  const Particle::LorentzVector p4_bWj1Wj2 = recBJet.p4() + recWJet1.p4() + recWJet2.p4();
+  const Particle::LorentzVector p4_Wj1Wj2  = recWJet1.p4() + recWJet2.p4();
+
+  if(calculate_matching)
   {
-    double max12 = std::max(value1, value2);
-    return std::max(max12, value3);
-  } 
-}
+    const std::map<int, bool> genMatchingTop = isGenMatchedJetTriplet(
+      recBJet.p4(),
+      recWJet1.p4(),
+      recWJet2.p4(),
+      genVar.at(kGenTop),
+      genVar.at(kGenTopB),
+      genVar.at(kGenTopW),
+      genVar.at(kGenTopWj1),
+      genVar.at(kGenTopWj2)
+    );
 
-double HadTopTagger::operator()(const RecoJet& recBJet, const RecoJet& recWJet1, const RecoJet& recWJet2)
-{
-  Particle::LorentzVector p4_bWj1Wj2 = recBJet.p4() + recWJet1.p4() + recWJet2.p4();
-  mvaInputs_["m_bWj1Wj2"]              = p4_bWj1Wj2.mass();
-  Particle::LorentzVector p4_Wj1Wj2 = recWJet1.p4() + recWJet2.p4();
-  mvaInputs_["m_Wj1Wj2"]               = p4_Wj1Wj2.mass();
-  mvaInputs_["m_bWj1"]                 = (recBJet.p4() + recWJet1.p4()).mass();
-  mvaInputs_["m_bWj2"]                 = (recBJet.p4() + recWJet2.p4()).mass();
-  mvaInputs_["m_Wj1Wj2_div_m_bWj1Wj2"] = ( p4_bWj1Wj2.mass() > 0. ) ? p4_Wj1Wj2.mass()/p4_bWj1Wj2.mass() : -1.;
-  mvaInputs_["CSV_b"]                  = recBJet.BtagCSV();
-  mvaInputs_["CSV_Wj1"]                = recWJet1.BtagCSV();
-  mvaInputs_["CSV_Wj2"]                = recWJet2.BtagCSV();
-  mvaInputs_["pT_b"]                   = recBJet.pt();
-  mvaInputs_["pT_Wj1"]                 = recWJet1.pt();
-  mvaInputs_["pT_Wj2"]                 = recWJet2.pt(); 
-  double dR_bWj1 = deltaR(recBJet.p4(), recWJet1.p4());
-  mvaInputs_["dR_bWj1"]                = dR_bWj1;
-  double dR_bWj2 = deltaR(recBJet.p4(), recWJet2.p4());
-  mvaInputs_["dR_bWj2"]                = dR_bWj2;
-  double dR_Wj1Wj2 = deltaR(recWJet1.p4(), recWJet2.p4());
-  mvaInputs_["dR_Wj1Wj2"]              = dR_Wj1Wj2;
-  mvaInputs_["dR_bW"]                  = deltaR(recBJet.p4(), p4_Wj1Wj2);
-  kinFit_->fit(recBJet.p4(), recWJet1.p4(), recWJet2.p4());
-  mvaInputs_["statusKinFit"]           = kinFit_->fit_status();
-  mvaInputs_["nllKinFit"]              = kinFit_->nll();
-  mvaInputs_["alphaKinFit"]            = kinFit_->alpha();
-  kinFit_->integrate(recBJet.p4(), recWJet1.p4(), recWJet2.p4());
-  mvaInputs_["logPKinFit"]             = ( kinFit_->p()    > 0. ) ? log(kinFit_->p())    : -1.e+3;
-  mvaInputs_["logPErrKinFit"]          = ( kinFit_->pErr() > 0. ) ? log(kinFit_->pErr()) : -1.e+3;
-  mvaInputs_["qg_b"]                   = recBJet.QGDiscr();
-  mvaInputs_["qg_Wj1"]                 = recWJet1.QGDiscr();
-  mvaInputs_["qg_Wj2"]                 = recWJet2.QGDiscr();
-  mvaInputs_["pT_bWj1Wj2"]             = p4_bWj1Wj2.pt();
-  mvaInputs_["pT_Wj1Wj2"]              = p4_Wj1Wj2.pt();
-  double expRjet = ( p4_bWj1Wj2.pt() > 0. ) ? 327./p4_bWj1Wj2.pt() : -1.;
-  mvaInputs_["max_dR_div_expRjet"]     = max(dR_bWj1, dR_bWj2, dR_Wj1Wj2)/expRjet;
-  if ( mva_ ) {
-    check_mvaInputs(mvaInputs_);
-    mvaOutput_ = (*mva_)(mvaInputs_);
+    const std::map<int, bool> genMatchingAntiTop = isGenMatchedJetTriplet(
+      recBJet.p4(),
+      recWJet1.p4(),
+      recWJet2.p4(),
+      genVarAnti.at(kGenTop),
+      genVarAnti.at(kGenTopB),
+      genVarAnti.at(kGenTopW),
+      genVarAnti.at(kGenTopWj1),
+      genVarAnti.at(kGenTopWj2)
+    );
+
+    if(genMatchingTop.at(kGenMatchedTriplet))
+    {
+      genTopPt = genVar.at(kGenTop).pt();
+    }
+    if(genMatchingAntiTop.at(kGenMatchedTriplet))
+    {
+      genTopPt = genVarAnti.at(kGenTop).pt();
+    }
+    isGenMatched = genMatchingTop.at(kGenMatchedTriplet) || genMatchingAntiTop.at(kGenMatchedTriplet);
   }
-  return mvaOutput_;
+
+  mvaInputsHTT = {
+    { "btagDisc_b",             recBJet.BtagCSV()                                   },
+    { "btagDisc_Wj1",           recWJet1.BtagCSV()                                  },
+    { "btagDisc_Wj2",           recWJet2.BtagCSV()                                  },
+    { "qg_Wj1",                 recWJet2.QGDiscr()                                  },
+    { "qg_Wj2",                 recWJet2.QGDiscr()                                  },
+    { "m_Wj1Wj2_div_m_bWj1Wj2", p4_Wj1Wj2.mass() / p4_bWj1Wj2.mass()                },
+    { "pT_Wj1Wj2",              p4_Wj1Wj2.pt()                                      },
+    { "dR_Wj1Wj2",              deltaR(recWJet1.p4(), recWJet2.p4())                },
+    { "m_bWj1Wj2",              p4_bWj1Wj2.mass()                                   },
+    { "dR_bW",                  deltaR(recBJet.p4(), recWJet1.p4() + recWJet2.p4()) },
+    { "m_bWj1",                 deltaR(recBJet.p4(), recWJet1.p4())                 },
+    { "m_bWj2",                 deltaR(recBJet.p4(), recWJet2.p4())                 },
+    { "mass_Wj1",               recWJet1.mass()                                     },
+    { "pT_Wj2",                 recWJet2.pt()                                       },
+    { "mass_Wj2",               recWJet2.mass()                                     },
+    { "pT_b",                   recBJet.pt()                                        },
+    { "mass_b",                 recBJet.mass()                                      },
+  };
+  const double HTT_CSVsort4rd = (*mva_xgb_HTT_CSVsort4rd_)(mvaInputsHTT);
+
+  return { { kXGB_CSVsort4rd, HTT_CSVsort4rd } };
 }
 
-const std::vector<std::string>& HadTopTagger::mvaInputVariables() const
-{ 
-  return mvaInputVariables_; 
+const std::map<std::string, double> &
+HadTopTagger::mvaInputs() const
+{
+  return mvaInputsHTT;
 }
-
-const std::map<std::string, double>& HadTopTagger::mvaInputs() const
-{ 
-  return mvaInputs_; 
-}
-

@@ -2,13 +2,16 @@
 #define tthAnalysis_HiggsToTauTau_HadTopTagger_h
 
 #include "tthAnalysis/HiggsToTauTau/interface/RecoJet.h" // RecoJet
-#include "tthAnalysis/HiggsToTauTau/interface/HadTopKinFit.h" // HadTopKinFit
-#include "tthAnalysis/HiggsToTauTau/interface/TMVAInterface.h" // TMVAInterface
+
+// forward declarations
+class TMVAInterface;
+
+enum { kXGB_CSVsort4rd };
 
 class HadTopTagger
 {
- public:
-  HadTopTagger(const std::string& mvaFileName = "");
+public:
+  HadTopTagger(void) ;
   ~HadTopTagger();
 
   /**
@@ -16,20 +19,24 @@ class HadTopTagger
    * @param mvaInputs Values of MVA input variables (stored in std::map with key = MVA input variable name)
    * @return          MVA output
    */
-  double
-  operator()(const RecoJet& recBJet, const RecoJet& recWJet1, const RecoJet& recWJet2);
+  std::map<int, double>
+  operator()(const RecoJet & recBJet,
+             const RecoJet & recWJet1,
+             const RecoJet & recWJet2,
+             bool & calculate_matching,
+             bool & isGenMatched,
+             double & genTopPt,
+             const std::map<int, Particle::LorentzVector> & genVar,
+             const std::map<int, Particle::LorentzVector> & genVarAnti);
 
-  const std::vector<std::string>& mvaInputVariables() const;
+  const std::map<std::string, double> &
+  mvaInputs() const;
 
-  const std::map<std::string, double>& mvaInputs() const;
+protected:
+  std::map<std::string, double> mvaInputsHTT;
+  std::vector<std::string>      mvaInputsHTTSort;
+  TMVAInterface * mva_xgb_HTT_CSVsort4rd_;
 
- protected:
-  HadTopKinFit* kinFit_;
-
-  std::vector<std::string> mvaInputVariables_;
-  TMVAInterface* mva_;
-  std::map<std::string, double> mvaInputs_;
-  double mvaOutput_;
 };
 
 #endif // tthAnalysis_HiggsToTauTau_HadTopTagger_h

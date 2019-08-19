@@ -1,66 +1,269 @@
 #include "tthAnalysis/HiggsToTauTau/interface/RecoHadTau.h" // RecoHadTau, GenParticle
 
-#include <iomanip>
+#include "tthAnalysis/HiggsToTauTau/interface/GenJet.h" // GenJet
+#include "tthAnalysis/HiggsToTauTau/interface/GenLepton.h" // GenLepton
+#include "tthAnalysis/HiggsToTauTau/interface/analysisAuxFunctions.h" // TauID, as_integer(), cmsException()
 
-RecoHadTau::RecoHadTau(Double_t pt,
-		       Double_t eta,
-		       Double_t phi,
-		       Double_t mass,
-		       Int_t charge,
-		       Double_t dxy,
-		       Double_t dz,
-		       Int_t decayMode,
-		       Int_t decayModeFinding,
-		       Int_t decayModeFindingNew,
-		       Int_t id_mva_dR03,		       
-		       Double_t raw_mva_dR03,
-		       Int_t id_mva_dR05,
-		       Double_t raw_mva_dR05,
-		       Int_t id_cut_dR03,
-		       Double_t raw_cut_dR03,
-		       Int_t id_cut_dR05,
-		       Double_t raw_cut_dR05,
-		       Int_t antiElectron,
-		       Int_t antiMuon)
-  : Particle(pt, eta, phi, mass)
-  , charge_(charge)
+RecoHadTau::RecoHadTau(const GenHadTau & particle,
+                       Double_t dxy,
+                       Double_t dz,
+                       Int_t decayMode,
+                       Bool_t idDecayMode,
+                       Int_t id_mva,
+                       Double_t raw_mva,
+                       Int_t antiElectron,
+                       Int_t antiMuon,
+                       UInt_t filterBits,
+                       Int_t jetIdx,
+                       UChar_t  genPartFlav,
+                       Int_t genMatchIdx)
+  : GenHadTau(particle)
   , dxy_(dxy)
   , dz_(dz)
   , decayMode_(decayMode)
-  , decayModeFinding_(decayModeFinding)
-  , decayModeFindingNew_(decayModeFindingNew)
-  , id_mva_dR03_(id_mva_dR03)
-  , raw_mva_dR03_(raw_mva_dR03)
-  , id_mva_dR05_(id_mva_dR05)
-  , raw_mva_dR05_(raw_mva_dR05)
-  , id_cut_dR03_(id_cut_dR03)
-  , raw_cut_dR03_(raw_cut_dR03)
-  , id_cut_dR05_(id_cut_dR05)
-  , raw_cut_dR05_(raw_cut_dR05)   
+  , idDecayMode_(idDecayMode)
+  , id_mva_(id_mva)
+  , raw_mva_(raw_mva)
   , antiElectron_(antiElectron)
   , antiMuon_(antiMuon)
-  , genLepton_(0)
-  , genHadTau_(0)
-  , genJet_(0)
+  , filterBits_(filterBits)
+  , jetIdx_(jetIdx)
+  , genPartFlav_(genPartFlav)
+  , genMatchIdx_(genMatchIdx)
+  , genLepton_(nullptr)
+  , genHadTau_(nullptr)
+  , genJet_(nullptr)
   , isLoose_(false)
   , isFakeable_(false)
   , isTight_(false)
 {}
 
-std::ostream& operator<<(std::ostream& stream, const RecoHadTau& hadTau)
+RecoHadTau::~RecoHadTau()
+{}
+
+void
+RecoHadTau::set_isLoose() const
 {
-  stream << " pT = " << hadTau.pt() << ","
-	 << " eta = " << hadTau.eta() << "," 
-	 << " phi = " << hadTau.phi() << "," 
-	 << " mass = " << hadTau.mass() << "," 
-	 << " charge = " << hadTau.charge() << std::endl; 
-  stream << " decayModeFinding = " << hadTau.decayModeFinding() << "," 
-	 << " id_mva_dR03 = " << hadTau.id_mva_dR03() << " (raw = " << hadTau.raw_mva_dR03() << ")," 
-	 << " antiElectron = " << hadTau.antiElectron() << ", antiMuon = " << hadTau.antiMuon()  << std::endl;
-  stream << "gen. matching:" 
-	 << " lepton = " << hadTau.genLepton() << "," 
-	 << " hadTau = " << hadTau.genHadTau() << "," 
-	 << " jet = " << hadTau.genJet() << std::endl;
-  return stream;
+  isLoose_ = true;
 }
 
+void
+RecoHadTau::set_isFakeable() const
+{
+  isFakeable_ = true;
+}
+
+void
+RecoHadTau::set_isTight() const
+{
+  isTight_ = true;
+}
+
+void
+RecoHadTau::set_genLepton(const GenLepton * genLepton)
+{
+  genLepton_.reset(genLepton);
+}
+
+void
+RecoHadTau::set_genHadTau(const GenHadTau * genHadTau)
+{
+  genHadTau_.reset(genHadTau);
+}
+
+void
+RecoHadTau::set_genJet(const GenJet * genJet)
+{
+  genJet_.reset(genJet);
+}
+
+Double_t
+RecoHadTau::dxy() const
+{
+  return dxy_;
+}
+
+Double_t
+RecoHadTau::dz() const
+{
+  return dz_;
+}
+
+Int_t
+RecoHadTau::decayMode() const
+{
+  return decayMode_;
+}
+
+Bool_t
+RecoHadTau::idDecayMode() const
+{
+  return idDecayMode_;
+}
+
+Int_t
+RecoHadTau::id_mva() const
+{
+  return id_mva_;
+}
+
+Double_t
+RecoHadTau::raw_mva() const
+{
+  return raw_mva_;
+}
+
+Int_t
+RecoHadTau::id_mva(TauID tauId) const
+{
+  if(! tauID_ids_.count(tauId))
+  {
+    throw cmsException(this, __func__, __LINE__)
+      << "No such tau ID = " << as_integer(tauId)
+    ;
+  }
+  return tauID_ids_.at(tauId);
+}
+
+Double_t
+RecoHadTau::raw_mva(TauID tauId) const
+{
+  if(! tauID_raws_.count(tauId))
+  {
+    throw cmsException(this, __func__, __LINE__)
+      << "No such tau ID = " << as_integer(tauId)
+    ;
+  }
+  return tauID_raws_.at(tauId);
+}
+
+Int_t
+RecoHadTau::antiElectron() const
+{
+  return antiElectron_;
+}
+
+Int_t
+RecoHadTau::antiMuon() const
+{
+  return antiMuon_;
+}
+
+UInt_t
+RecoHadTau::filterBits() const
+{
+  return filterBits_;
+}
+
+Int_t
+RecoHadTau::jetIdx() const
+{
+  return jetIdx_;
+}
+
+UChar_t
+RecoHadTau::genPartFlav() const
+{
+  return genPartFlav_;
+}
+
+Int_t
+RecoHadTau::genMatchIdx() const
+{
+  return genMatchIdx_;
+}
+
+const GenLepton *
+RecoHadTau::genLepton() const
+{
+  return genLepton_.get();
+}
+
+const GenHadTau *
+RecoHadTau::genHadTau() const
+{
+  return genHadTau_.get();
+}
+
+const GenJet *
+RecoHadTau::genJet() const
+{
+  return genJet_.get();
+}
+
+bool
+RecoHadTau::isGenMatched(bool requireChargeMatch) const
+{
+  if(requireChargeMatch)
+  {
+    if(!! genHadTau_)
+    {
+      return charge() == genHadTau_->charge();
+    }
+    if(!! genLepton_)
+    {
+      return charge() == genLepton_->charge();
+    }
+    return false;
+  }
+  return !! genHadTau_ || !! genLepton_;
+}
+
+bool
+RecoHadTau::hasAnyGenMatch() const
+{
+  return !! genLepton_ || !! genHadTau_ || !! genJet_;
+}
+
+bool
+RecoHadTau::isLoose() const
+{
+  return isLoose_;
+}
+
+bool
+RecoHadTau::isFakeable() const
+{
+  return isFakeable_;
+}
+
+bool
+RecoHadTau::isTight() const
+{
+  return isTight_;
+}
+
+std::ostream &
+operator<<(std::ostream & stream,
+           const RecoHadTau & hadTau)
+{
+  stream << static_cast<const GenHadTau &>(hadTau)                           << ",\n"
+            " decayMode = "        << hadTau.decayMode()                     << ","
+            " oldDecayModeID = "   << hadTau.idDecayMode()                   << ","
+            " id_mva = "           << hadTau.id_mva()                        <<
+            " (raw = "             << hadTau.raw_mva()                       << "),\n"
+            " genPartFlav = "      << static_cast<int>(hadTau.genPartFlav()) << ", "
+            " antiElectron = "     << hadTau.antiElectron()                  << ","
+            " antiMuon = "         << hadTau.antiMuon()                      << ",\n"
+            " is loose/fakeable/tight = " << hadTau.isLoose()                << '/'
+                                          << hadTau.isFakeable()             << '/'
+                                          << hadTau.isTight()                << ",\n"
+            " gen. matching:";
+  stream << ",\n  lepton = " << hadTau.genLepton();
+  if(hadTau.genLepton())
+  {
+    stream << ": " << *(hadTau.genLepton());
+  }
+  stream << ",\n  hadTau = " << hadTau.genHadTau();
+  if(hadTau.genHadTau())
+  {
+    stream << ": " << *(hadTau.genHadTau());
+  }
+  stream << ",\n  jet    = " << hadTau.genJet();
+  if(hadTau.genJet())
+  {
+    stream << ": " << *(hadTau.genJet());
+  }
+  stream << '\n';
+  return stream;
+}

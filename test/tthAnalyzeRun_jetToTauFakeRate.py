@@ -1,107 +1,128 @@
-import os, logging, sys, getpass
+#!/usr/bin/env python
 
-from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_jetToTauFakeRate_2015 import samples_2015
-from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_jetToTauFakeRate_2016 import samples_2016
-from tthAnalysis.HiggsToTauTau.analyzeConfig_jetToTauFakeRate import analyzeConfig_jetToTauFakeRate
+from tthAnalysis.HiggsToTauTau.configs.analyzeConfig_jetToTauFakeRate import analyzeConfig_jetToTauFakeRate
 from tthAnalysis.HiggsToTauTau.jobTools import query_yes_no
+from tthAnalysis.HiggsToTauTau.analysisSettings import systematics, get_lumi
+from tthAnalysis.HiggsToTauTau.runConfig import tthAnalyzeParser, filter_samples
+from tthAnalysis.HiggsToTauTau.common import logging, load_samples
 
-#ERA = "2015"
-ERA = "2016"
+import os
+import sys
+import getpass
 
-samples = None
-LUMI = None
-if ERA == "2015":
-  samples = samples_2015
-  LUMI =  2.3e+3 # 1/pb
-elif ERA == "2016":
-  samples = samples_2016
-  LUMI = 35.9e+3 # 1/pb
-else:
-  raise ValueError("Invalid Configuration parameter 'ERA' = %s !!" % ERA)
+# E.g.: ./test/tthAnalyzeRun_jetToTauFakeRate.py -v 2017Dec13 -e 2017
 
-version = "2017Mar27"
+sys_choices      = [ 'full' ] + systematics.an_jetToTauFR_opts
+systematics.full = systematics.an_jetToTauFR
+
+parser = tthAnalyzeParser()
+parser.add_sys(sys_choices)
+parser.add_tau_id_wp("dR03mvaVVLoose")
+parser.add_files_per_job()
+parser.add_use_home()
+parser.add_jet_cleaning()
+parser.add_gen_matching()
+parser.add_hlt_filter()
+args = parser.parse_args()
+
+# Common arguments
+era                = args.era
+version            = args.version
+dry_run            = args.dry_run
+no_exec            = args.no_exec
+auto_exec          = args.auto_exec
+check_output_files = not args.not_check_input_files
+debug              = args.debug
+sample_filter      = args.filter
+num_parallel_jobs  = args.num_parallel_jobs
+running_method     = args.running_method
+
+# Additional arguments
+systematics_label = args.systematics
+tau_id_wp         = args.tau_id_wp
+files_per_job     = args.files_per_job
+use_home          = args.use_home
+hlt_filter        = args.hlt_filter
+jet_cleaning      = args.jet_cleaning
+gen_matching      = args.gen_matching
+
+# Use the arguments
+central_or_shifts = []
+for systematic_label in systematics_label:
+  for central_or_shift in getattr(systematics, systematic_label):
+    if central_or_shift not in central_or_shifts:
+      central_or_shifts.append(central_or_shift)
+lumi = get_lumi(era)
+jet_cleaning_by_index = (jet_cleaning == 'by_index')
+gen_matching_by_index = (gen_matching == 'by_index')
+
+samples = load_samples(era)
+for sample_name, sample_info in samples.items():
+  if sample_name == 'sum_events': continue
+  if sample_info["type"] == "mc":
+    sample_info["triggers"] = [ "1e", "1mu", "1e1mu" ]
+  if sample_name.startswith(("/DoubleMuon/", "/DoubleEG/", "/Tau/")) and sample_name.find("PromptReco") == -1:
+      sample_info["use_it"] = False
 
 if __name__ == '__main__':
-  logging.basicConfig(
-    stream = sys.stdout,
-    level = logging.INFO,
-    format = '%(asctime)s - %(levelname)s: %(message)s')
+  logging.info(
+    "Running the jobs with the following systematic uncertainties enabled: %s" % \
+    ', '.join(central_or_shifts)
+  )
+
+  if sample_filter:
+    samples = filter_samples(samples, sample_filter)
 
   analysis = analyzeConfig_jetToTauFakeRate(
-    configDir = os.path.join("/home", getpass.getuser(), "ttHAnalysis", ERA, version),
-    outputDir = os.path.join("/hdfs/local/ttH_2tau", getpass.getuser(), "ttHAnalysis", ERA, version),
-    ##outputDir = os.path.join("/home", getpass.getuser(), "ttHAnalysis", ERA, version),
-    executable_analyze = "analyze_jetToTauFakeRate",
-    samples = samples,
-    charge_selections = [ "OS" ],
-    jet_minPt = 20.,
-    jet_maxPt = 1.e+6,
-    jet_minAbsEta = -1.,
-    jet_maxAbsEta = 2.3,
-    hadTau_selection_denominator = "dR03mvaVVLoose", 
-    hadTau_selections_numerator = [      
+    configDir = os.path.join("/home",       getpass.getuser(), "ttHAnalysis", era, version),
+    outputDir = os.path.join("/hdfs/local", getpass.getuser(), "ttHAnalysis", era, version),
+    executable_analyze               = "analyze_jetToTauFakeRate",
+    samples                          = samples,
+    charge_selections                = [ "OS" ],
+    jet_minPt                        = 20.,
+    jet_maxPt                        = 1.e+6,
+    jet_minAbsEta                    = -1.,
+    jet_maxAbsEta                    = 2.3,
+    hadTau_selection_denominator     = tau_id_wp,
+    hadTau_selections_numerator      = [
       "dR03mvaVLoose",
       "dR03mvaLoose",
       "dR03mvaMedium",
       "dR03mvaTight",
       "dR03mvaVTight",
-      "dR03mvaVVTight"
+      "dR03mvaVVTight",
     ],
-    absEtaBins = [ -1., 1.479, 9.9 ],
-    ptBins = [ 20., 25., 30., 35., 40., 45., 50., 60., 70., 80., 100., 200. ],
-    central_or_shifts = [ 
-      "central",
-##       "CMS_ttHl_btag_HFUp", 
-##       "CMS_ttHl_btag_HFDown",	
-##       "CMS_ttHl_btag_HFStats1Up", 
-##       "CMS_ttHl_btag_HFStats1Down",
-##       "CMS_ttHl_btag_HFStats2Up", 
-##       "CMS_ttHl_btag_HFStats2Down",
-##       "CMS_ttHl_btag_LFUp", 
-##       "CMS_ttHl_btag_LFDown",	
-##       "CMS_ttHl_btag_LFStats1Up", 
-##       "CMS_ttHl_btag_LFStats1Down",
-##       "CMS_ttHl_btag_LFStats2Up", 
-##       "CMS_ttHl_btag_LFStats2Down",
-##       "CMS_ttHl_btag_cErr1Up",
-##       "CMS_ttHl_btag_cErr1Down",
-##       "CMS_ttHl_btag_cErr2Up",
-##       "CMS_ttHl_btag_cErr2Down",
-##       "CMS_ttHl_JESUp",
-##       "CMS_ttHl_JESDown",
-##       "CMS_ttHl_tauESUp",
-##       "CMS_ttHl_tauESDown",
-##       "CMS_ttHl_FRet_shiftUp",
-##       "CMS_ttHl_FRet_shiftDown",
-##       "CMS_ttHl_FRmt_shiftUp",
-##       "CMS_ttHl_FRmt_shiftDown",
-##       "CMS_ttHl_thu_shape_ttH_x1Up",  
-##       "CMS_ttHl_thu_shape_ttH_x1Down",
-##       "CMS_ttHl_thu_shape_ttH_y1Up",   
-##       "CMS_ttHl_thu_shape_ttH_y1Down",
-##       "CMS_ttHl_thu_shape_ttW_x1Up",
-##       "CMS_ttHl_thu_shape_ttW_x1Down",
-##       "CMS_ttHl_thu_shape_ttW_y1Up",
-##       "CMS_ttHl_thu_shape_ttW_y1Down",
-##       "CMS_ttHl_thu_shape_ttZ_x1Up",
-##       "CMS_ttHl_thu_shape_ttZ_x1Down",
-##       "CMS_ttHl_thu_shape_ttZ_y1Up",
-##       "CMS_ttHl_thu_shape_ttZ_y1Down"  
-      
-    ],
-    max_files_per_job = 100,
-    era = ERA, use_lumi = True, lumi = LUMI,
-    debug = False,
-    running_method = "sbatch",
-    num_parallel_jobs = 8,
-    executable_comp_jetToTauFakeRate = "comp_jetToTauFakeRate")
+    absEtaBins                       = [ -1., 1.479, 9.9 ],
+    ptBins                           = [ 20., 25., 30., 35., 40., 45., 50., 60., 70., 80., 100., 200. ],
+    decayModes                       = [ -1, 0, 1, 10 ],
+    jet_cleaning_by_index            = jet_cleaning_by_index,
+    gen_matching_by_index            = gen_matching_by_index,
+    central_or_shifts                = central_or_shifts,
+    max_files_per_job                = files_per_job,
+    era                              = era,
+    use_lumi                         = True,
+    lumi                             = lumi,
+    check_output_files               = check_output_files,
+    running_method                   = running_method,
+    num_parallel_jobs                = num_parallel_jobs,
+    executable_comp_jetToTauFakeRate = "comp_jetToTauFakeRate",
+    hlt_filter                       = hlt_filter,
+    dry_run                          = dry_run,
+    isDebug                          = debug,
+    use_home                         = use_home,
+  )
 
-  analysis.create()
+  job_statistics = analysis.create()
+  for job_type, num_jobs in job_statistics.items():
+    logging.info(" #jobs of type '%s' = %i" % (job_type, num_jobs))
 
-  ##run_analysis = query_yes_no("Start jobs ?")
-  run_analysis = True
+  if auto_exec:
+    run_analysis = True
+  elif no_exec:
+    run_analysis = False
+  else:
+    run_analysis = query_yes_no("Start jobs ?")
   if run_analysis:
     analysis.run()
   else:
     sys.exit(0)
-

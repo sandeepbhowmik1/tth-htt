@@ -1,57 +1,65 @@
 #ifndef tthAnalysis_HiggsToTauTau_hltPath_h
 #define tthAnalysis_HiggsToTauTau_hltPath_h
 
-#include <Rtypes.h> // Int_t
-#include <TTree.h> // TTree
+#include "tthAnalysis/HiggsToTauTau/interface/ReaderBase.h" // ReaderBase
 
-#include <string> // std::string
-#include <vector> // std::vector<>
-#include <assert.h> // assert
+#include <Rtypes.h> // Int_t
+
+#include <iosfwd> // std::ostream
 
 /**
  * @brief Auxiliary data structure for handling trigger information
  */
 class hltPath
 {
- public:
- hltPath(const std::string& branchName, double minPt = -1., double maxPt = -1.)
-    : branchName_(branchName)
-    , value_(-1)
-    , minPt_(minPt)
-    , maxPt_(maxPt)
-  {}
+public:
+  hltPath(const std::string & branchName,
+          double minPt = -1.,
+          double maxPt = -1.,
+          const std::string & label = "");
   ~hltPath() {}
-  void setBranchAddress(TTree* tree)
-  {
-    tree->SetBranchAddress(branchName_.data(), &value_);
-  } 
-  const std::string& getBranchName() const 
-  { 
-    return branchName_; 
-  }
-  Int_t getValue() const 
-  {
-    assert(value_ == 0 || value_ == 1); 
-    return value_; 
-  }
-  double getMinPt() const
-  {
-    return minPt_; 
-  }
-  double getMaxPt() const
-  {
-    return maxPt_; 
-  }
- private:
+
+  const std::string &
+  getBranchName() const;
+
+  Int_t
+  getValue() const;
+
+  double
+  getMinPt() const;
+
+  double
+  getMaxPt() const;
+
+  const std::string &
+  getLabel() const;
+
+  friend class hltPathReader;
+
+protected:
+  std::vector<std::string>
+  get_available_branches(TTree * tree) const;
+
   std::string branchName_;
-  Int_t value_;
-  double minPt_; 
+  Bool_t value_;
+  double minPt_;
   double maxPt_;
+  std::string label_;
 };
 
-std::vector<hltPath*> create_hltPaths(const std::vector<std::string>& branchNames);
-void hltPaths_setBranchAddresses(TTree* tree, const std::vector<hltPath*>& hltPaths);
-bool hltPaths_isTriggered(const std::vector<hltPath*>& hltPaths);
-void hltPaths_delete(const std::vector<hltPath*>& hltPaths);
+std::vector<hltPath *>
+create_hltPaths(const std::vector<std::string> & branchNames,
+                const std::string & label = "");
+
+bool
+hltPaths_isTriggered(const std::vector<hltPath *> & hltPaths,
+                     bool verbose = false);
+
+void
+hltPaths_delete(const std::vector<hltPath *> & hltPaths);
+
+std::ostream &
+operator<<(std::ostream & stream,
+           const hltPath & hltPath_iter);
 
 #endif // tthAnalysis_HiggsToTauTau_hltPath_h

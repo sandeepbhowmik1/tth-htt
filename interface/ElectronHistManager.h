@@ -5,60 +5,65 @@
  *
  * Book and fill histograms for electrons in ttH, H->tautau analysis
  *
- * \author Christian Veelken, Tallin
+ * \author Christian Veelken, Tallinn
  *
  */
 
 #include "tthAnalysis/HiggsToTauTau/interface/HistManagerBase.h" // HistManagerBase
-#include "tthAnalysis/HiggsToTauTau/interface/RecoElectron.h"
+#include "tthAnalysis/HiggsToTauTau/interface/RecoElectron.h" // RecoElectron
 
 class ElectronHistManager
   : public HistManagerBase
 {
- public:
-  ElectronHistManager(edm::ParameterSet const& cfg);
+public:
+  ElectronHistManager(const edm::ParameterSet & cfg);
   ~ElectronHistManager() {}
 
   /// book and fill histograms
-  void bookHistograms(TFileDirectory& dir);
-  void fillHistograms(const RecoElectron& electron, double evtWeight);
-  void fillHistograms(const std::vector<const RecoElectron*>& electrons, double evtWeight);
-  void fillHistograms2(const RecoElectron& electron, double evtWeight, double met, double metphi, double ptfix);                       // NEWLY ADDED      
-  void fillHistograms2(const std::vector<const RecoElectron*>& electrons, double evtWeight, double met, double metphi, double ptfix);  // NEWLY ADDED    
+  void
+  bookHistograms(TFileDirectory & dir) override;
 
-  private:
-  TH1* histogram_pt_;
-  TH1* histogram_eta_;
-  TH1* histogram_phi_;
-  TH1* histogram_charge_;
+  void
+  fillHistograms(const RecoElectron & electron,
+                 double evtWeight);
 
-  TH1* histogram_dxy_;
-  TH1* histogram_dz_;     
-  TH1* histogram_relIso_;  
-  TH1* histogram_sip3d_;
-  TH1* histogram_mvaRawTTH_; 
-  TH1* histogram_jetPtRatio_;  
-  TH1* histogram_jetBtagCSV_; 
-  TH1* histogram_tightCharge_;      
-  TH1* histogram_mvaRawPOG_; 
-  TH1* histogram_mvaRawPOG_HZZ_; 
-  TH1* histogram_sigmaEtaEta_; 
-  TH1* histogram_HoE_;   
-  TH1* histogram_deltaEta_;  
-  TH1* histogram_deltaPhi_; 
-  TH1* histogram_OoEminusOoP_;
-  TH1* histogram_nLostHits_;  
-  TH1* histogram_passesConversionVeto_;
+  void
+  fillHistograms(const std::vector<const RecoElectron *> & electrons,
+                 double evtWeight);
 
-  TH1* histogram_abs_genPdgId_;
-  TH1* histogram_gen_times_recCharge_;
+  /// flag to book & fill either minimal (cone_pt, eta, phi) or full (incl. electron ID variables) set of histograms 
+  /// 
+  /// Note: use kOption_minimalHistograms whenever possible, to reduce memory consumption of hadd jobs
+  enum { kOption_undefined, kOption_allHistograms, kOption_minimalHistograms };
 
-  std::vector<TH1*> histograms_;
+private:
+  TH1 * histogram_cone_pt_;
+  TH1 * histogram_eta_;
+  TH1 * histogram_phi_;
+  TH1 * histogram_abs_genPdgId_;
 
-  TH1* histogram_Mt_;     // NEWLY ADDED     
+  TH1 * histogram_pt_;
+  TH1 * histogram_assocJet_pt_;
+  TH1 * histogram_charge_;
+  TH1 * histogram_dxy_;
+  TH1 * histogram_dz_;
+  TH1 * histogram_relIso_;
+  TH1 * histogram_sip3d_;
+  TH1 * histogram_mvaRawTTH_;
+  TH1 * histogram_jetPtRatio_;
+  TH1 * histogram_jetBtagCSV_;
+  TH1 * histogram_tightCharge_;
+  TH1 * histogram_mvaRawPOG_;
+  TH1 * histogram_sigmaEtaEta_;
+  TH1 * histogram_HoE_;
+  TH1 * histogram_deltaEta_;
+  TH1 * histogram_deltaPhi_;
+  TH1 * histogram_OoEminusOoP_;
+  TH1 * histogram_nLostHits_;
+  TH1 * histogram_passesConversionVeto_;  
+  TH1 * histogram_gen_times_recCharge_;
 
-  TH1* histogram_Mt_fix_; // NEWLY ADDED     
-
+  int option_; // flag to book & fill either full or minimal set of histograms (to reduce memory consumption of hadd jobs)
 
   int idx_; // flag to select leading or subleading electron (set idx to -1 to make plots for all electrons)
 };

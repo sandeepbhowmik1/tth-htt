@@ -74,37 +74,55 @@ struct
 NtupleMetaData
 {
   NtupleMetaData() = default;
-  NtupleMetaData(const std::string & inputFilePath_,
-                 const std::string & inputFileName_,
-                 const std::string & dirName_,
-                 const std::string & treeName_,
+  NtupleMetaData(const std::vector<std::string> & inputFileNames_,
                  const std::string & legendEntry_,
-                 const std::string & selection_)
-  : inputFilePath(inputFilePath_)
-  , inputFileName(inputFileName_)
-  , dirName(dirName_)
-  , treeName(treeName_)
+                 const std::string & selection_,
+                 const std::string & inputbase_dir_)
+  : inputFileNames(inputFileNames_)
   , legendEntry(legendEntry_)
   , selection(selection_)
-  {}
-  const std::string inputFilePath;
-  const std::string inputFileName;
-  const std::string dirName;
-  const std::string treeName;
+  , inputbase_dir(inputbase_dir_)
+  {
+    for(const std::string inputFileName: inputFileNames)
+    {
+      const std::string fullPathInputFile = inputbase_dir + "/" + inputFileName;
+      TFile * inputFile = TFile::Open(fullPathInputFile.c_str(), "read");
+      TList * fileKeys = inputFile->GetListOfKeys();
+      TIter it(fileKeys);
+      TKey * key = nullptr;
+      while((key = static_cast<TKey *>(it())))
+      {
+        const std::string className(key->GetClassName());
+        if(className == "TTree")
+        {
+          if(! treeNames.count(inputFileName))
+          {
+            treeNames[inputFileName] = {};
+          }
+          treeNames[inputFileName].push_back(key->GetName());
+        }
+      }
+      inputFile->Close();
+    }
+  }
+  const std::vector<std::string> inputFileNames;
+  std::map<std::string, std::vector<std::string>> treeNames;
   const std::string legendEntry;
   const std::string selection;
+  const std::string inputbase_dir;
 };
 
 //-------------------------------------------------------------------------------
+
 /* *************************** EDIT THIS ***************************************/
 
-const std::string base_dir = "/home/" + _whoami() + "/sandbox/sync_ntuples/";
-const std::string inputbase_dir = "/hdfs/local/karl/syncNtuples/comparison/";
-const std::map<std::string, std::map<std::string, NtupleMetaData>> ntupleMetadataMap = {
-  { "tth", { { "llr",     { inputbase_dir + "llr",     "syncNtuple_ttH_80X.root",               "", "syncTree", "LLR",     "" } },
-             { "tallinn", { inputbase_dir + "tallinn", "ttHJetToNonbb_M125_13TeV_sync_v0.root", "", "tree",     "Tallinn", "" } },
-             { "cornell", { inputbase_dir + "cornell", "syncNtuple.root",                       "", "syncTree", "Cornell", "" } },
-             { "nd",      { inputbase_dir + "nd",      "sync_ntuple.root",                      "", "syncTree", "ND",      "" } } } }
+const std::string base_dir = "/home/" + _whoami() + "/sandbox/compare_syncNtuples/plots_Cornell_v9_vs_Tallinn_v22_vs_IHEP_v9_vs_LLR_v11/";
+const std::string inputbase_dir = "/home/" + _whoami() + "/sandbox/compare_syncNtuples/";
+const std::vector<NtupleMetaData> ntupleMetadataMap = {
+    { { "sync_LLR_object_v11.root",          "sync_LLR_event_v3.root"           }, "LLR",     "", inputbase_dir },
+    { { "sync_Tallinn_v22.root",             "sync_Tallinn_v22.root"            }, "Tallinn", "", inputbase_dir },
+    { { "syncNtuple_object_cornell_v9.root", "syncNtuple_event_cornell_v7.root" }, "Cornell", "", inputbase_dir },
+    { { "IHEP_ttHsyncV9.root",               "IHEP_EvtSync_V4.root"             }, "IHEP",    "", inputbase_dir },
 };
 
 //-------------------------------------------------------------------------------
@@ -122,21 +140,9 @@ TFile* openFile(const std::string& filePath, const std::string& fileName)
   return file;
 }
 
-TTree* loadTree(TFile* file, const std::string& treeName, const std::string & dirName = "")
+TTree* loadTree(TFile* file, const std::string& treeName)
 {
-  TTree* tree = nullptr;
-  if(dirName != "")
-  {
-    TDirectory * dir = dynamic_cast<TDirectory *>(file->Get(dirName.c_str()));
-    if(!dir)
-    {
-      std::cerr << "Failed to open subdirectory = " << dirName << " from file = " << file->GetName() << " --> aborting !!\n";
-      assert(0);
-    }
-    tree = dynamic_cast<TTree*>(dir->Get(treeName.data()));
-  }
-  else
-    tree = dynamic_cast<TTree*>(file->Get(treeName.data()));
+  TTree* tree = dynamic_cast<TTree*>(file->Get(treeName.data()));
 
   if ( !tree ) {
     std::cerr << "Failed to load tree = " << treeName << " from file = " << file->GetName() << " --> aborting !!" << std::endl;
@@ -170,7 +176,7 @@ struct branchEntryType
     histogram_ = new TH1D(histogramName_.data(), histogramName_.data(), numBins_, xMin_, xMax_);
     histogram_->Sumw2();
   }
-  ~branchEntryType() 
+  ~branchEntryType()
   {
     delete histogram_;
   }
@@ -221,18 +227,18 @@ std::string getLegendEntry(const std::string& legendEntry, const TH1* histogram)
 TH1* compRatioHistogram(const std::string& ratioHistogramName, const TH1* numerator, const TH1* denominator)
 {
   TH1* histogramRatio = 0;
-  
+
   if ( numerator->GetDimension() == denominator->GetDimension() &&
        numerator->GetNbinsX() == denominator->GetNbinsX() ) {
     histogramRatio = (TH1*)numerator->Clone(ratioHistogramName.data());
     histogramRatio->Divide(denominator);
-    
+
     int nBins = histogramRatio->GetNbinsX();
     for ( int iBin = 1; iBin <= nBins; ++iBin ){
       double binContent = histogramRatio->GetBinContent(iBin);
       histogramRatio->SetBinContent(iBin, binContent - 1.);
     }
-    
+
     histogramRatio->SetLineColor(numerator->GetLineColor());
     histogramRatio->SetLineWidth(numerator->GetLineWidth());
     histogramRatio->SetMarkerColor(numerator->GetMarkerColor());
@@ -244,16 +250,16 @@ TH1* compRatioHistogram(const std::string& ratioHistogramName, const TH1* numera
 }
 
 void showHistograms(double canvasSizeX, double canvasSizeY,
-		    TH1* histogram_ref, const std::string& legendEntry_ref, 
-		    TH1* histogram2, const std::string& legendEntry2, 
-		    TH1* histogram3, const std::string& legendEntry3, 
-		    TH1* histogram4, const std::string& legendEntry4, 
-		    TH1* histogram5, const std::string& legendEntry5, 
-		    TH1* histogram6, const std::string& legendEntry6, 
-		    const std::string& xAxisTitle, double xAxisOffset,
-		    bool useLogScale, double yMin, double yMax, const std::string& yAxisTitle, double yAxisOffset,
-		    double legendX0, double legendY0, 
-		    const std::string& outputFilePath, const std::string& outputFileName)
+        TH1* histogram_ref, const std::string& legendEntry_ref,
+        TH1* histogram2, const std::string& legendEntry2,
+        TH1* histogram3, const std::string& legendEntry3,
+        TH1* histogram4, const std::string& legendEntry4,
+        TH1* histogram5, const std::string& legendEntry5,
+        TH1* histogram6, const std::string& legendEntry6,
+        const std::string& xAxisTitle, double xAxisOffset,
+        bool useLogScale, double yMin, double yMax, const std::string& yAxisTitle, double yAxisOffset,
+        double legendX0, double legendY0,
+        const std::string& outputFilePath, const std::string& outputFileName)
 {
   if(! histogram_ref) return;
 
@@ -288,7 +294,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   int markerStyles[6] = { 24, 25, 20, 21, 22, 23 };
   int markerSizes[6] = { 1, 1, 1, 1, 1, 1 };
 
-  TLegend* legend = new TLegend(legendX0, legendY0, 0.87, 0.93, "", "brNDC"); 
+  TLegend* legend = new TLegend(legendX0, legendY0, 0.87, 0.93, "", "brNDC");
   legend->SetBorderSize(0);
   legend->SetFillColor(0);
   legend->SetTextSize(0.040);
@@ -380,7 +386,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       histogram2_div_ref->SetStats(false);
       histogram2_div_ref->SetMinimum(-0.50);
       histogram2_div_ref->SetMaximum(+0.50);
-      
+
       TAxis* xAxis_bottom = histogram2_div_ref->GetXaxis();
       xAxis_bottom->SetTitle(xAxis_top->GetTitle());
       xAxis_bottom->SetLabelColor(1);
@@ -390,7 +396,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       xAxis_bottom->SetLabelOffset(0.02);
       xAxis_bottom->SetLabelSize(0.08);
       xAxis_bottom->SetTickLength(0.055);
-      
+
       TAxis* yAxis_bottom = histogram2_div_ref->GetYaxis();
       yAxis_bottom->SetTitle(Form("#frac{%s - %s}{%s}", legendEntry2.data(), legendEntry_ref.data(), legendEntry_ref.data()));
       yAxis_bottom->SetTitleOffset(0.85);
@@ -398,8 +404,8 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       yAxis_bottom->CenterTitle();
       yAxis_bottom->SetTitleSize(0.08);
       yAxis_bottom->SetLabelSize(0.08);
-      yAxis_bottom->SetTickLength(0.04);  
-      
+      yAxis_bottom->SetTickLength(0.04);
+
       histogram2_div_ref->Draw("e1p");
     }
   }
@@ -413,7 +419,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       histogram3_div_ref->SetStats(false);
       histogram3_div_ref->SetMinimum(-0.50);
       histogram3_div_ref->SetMaximum(+0.50);
-      
+
       TAxis* xAxis_bottom = histogram3_div_ref->GetXaxis();
       xAxis_bottom->SetTitle(xAxis_top->GetTitle());
       xAxis_bottom->SetLabelColor(1);
@@ -423,7 +429,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       xAxis_bottom->SetLabelOffset(0.02);
       xAxis_bottom->SetLabelSize(0.08);
       xAxis_bottom->SetTickLength(0.055);
-      
+
       TAxis* yAxis_bottom = histogram3_div_ref->GetYaxis();
       yAxis_bottom->SetTitle(Form("#frac{%s - %s}{%s}", legendEntry3.data(), legendEntry_ref.data(), legendEntry_ref.data()));
       yAxis_bottom->SetTitleOffset(0.85);
@@ -431,8 +437,8 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       yAxis_bottom->CenterTitle();
       yAxis_bottom->SetTitleSize(0.08);
       yAxis_bottom->SetLabelSize(0.08);
-      yAxis_bottom->SetTickLength(0.04);  
-      
+      yAxis_bottom->SetTickLength(0.04);
+
       if ( histogram2 ) histogram3_div_ref->Draw("e1psame");
       else histogram3_div_ref->Draw("e1p");
     }
@@ -474,7 +480,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
       histogram6_div_ref->Draw("e1psame");
     }
   }
-  
+
   canvas->Update();
 
   TString outputFileName_full_tstring = outputFilePath.data();
@@ -487,7 +493,7 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   else outputFileName_plot.append("_linear");
   if ( idx != std::string::npos ) canvas->Print(std::string(outputFileName_plot).append(std::string(outputFileName_full, idx)).data());
   canvas->Print(std::string(outputFileName_plot).append(".png").data());
-  
+
   delete legend;
   delete histogram2_div_ref;
   delete histogram3_div_ref;
@@ -496,240 +502,345 @@ void showHistograms(double canvasSizeX, double canvasSizeY,
   delete histogram6_div_ref;
   delete topPad;
   delete bottomPad;
-  delete canvas;  
+  delete canvas;
 }
 //-------------------------------------------------------------------------------
 
-void compareSyncNtuples(const std::string & ref_str,
-                        const std::string & test_str,
-                        const std::string & sample_str)
+void compareSyncNtuples(const std::string & ref_name,
+                        const std::string & test_name,
+                        const std::string & ref_inputFileName,
+                        const std::string & test_inputFileName,
+                        const std::string & ref_selection,
+                        const std::string & test_selection,
+                        const std::string & treeName)
 {
   gROOT->SetBatch(true);
   gErrorIgnoreLevel = kWarning;
 
-  const NtupleMetaData & ref = ntupleMetadataMap.at(sample_str).at(ref_str);
-  const NtupleMetaData & test = ntupleMetadataMap.at(sample_str).at(test_str);
+  std::cout << "Plotting " << treeName << " between "
+            << ref_name << " (" << ref_inputFileName << ") and "
+            << test_name << " (" << test_inputFileName << ")\n"
+  ;
 
-  TFile* inputFile_ref = openFile(ref.inputFilePath, ref.inputFileName);
-  TTree* tree_ref = loadTree(inputFile_ref, ref.treeName, ref.dirName);
-  TFile* inputFile_test = openFile(test.inputFilePath, test.inputFileName);
-  TTree* tree_test = loadTree(inputFile_test, test.treeName, test.dirName);
+  TFile* inputFile_ref = openFile(inputbase_dir, ref_inputFileName);
+  TTree* tree_ref = loadTree(inputFile_ref, treeName);
+  TFile* inputFile_test = openFile(inputbase_dir, test_inputFileName);
+  TTree* tree_test = loadTree(inputFile_test, treeName);
 
-  const std::string outputFilePath = base_dir + "plots/" +
-                                     sample_str + "/" + ref.legendEntry + "_vs_" + test.legendEntry;
+  const std::string outputFilePath = base_dir + "/" + treeName + "/" + ref_name + "_vs_" + test_name;
   struct stat st = {0};
   if(stat(outputFilePath.c_str(), &st) == -1)
+  {
     _mkdir(outputFilePath.c_str());
+  }
 
   std::vector<branchEntryType*> branchesToCompare;
   branchesToCompare.push_back(new branchEntryType("n_presel_mu", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_fakeablesel_mu", "I", "", 20, -0.5, 19.5));
-//  branchesToCompare.push_back(new branchEntryType("n_cutsel_mu", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_mvasel_mu", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_presel_ele", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_fakeablesel_ele", "I", "", 20, -0.5, 19.5));
-//  branchesToCompare.push_back(new branchEntryType("n_cutsel_ele", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_mvasel_ele", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_presel_tau", "I", "", 20, -0.5, 19.5));
   branchesToCompare.push_back(new branchEntryType("n_presel_jet", "I", "", 20, -0.5, 19.5));
-  branchesToCompare.push_back(new branchEntryType("mu0_charge", "I", "n_presel_mu >= 1", 3, -1.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu0_jetNDauChargedMVASel", "F", "n_presel_mu >= 1", 20, -0.5, 19.5));
-  branchesToCompare.push_back(new branchEntryType("mu0_jetPtRel", "F", "n_presel_mu >= 1", 100., -0.01, 10.));
-  branchesToCompare.push_back(new branchEntryType("mu0_miniIsoNeutral", "F", "n_presel_mu >= 1", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("mu0_miniIsoCharged", "F", "n_presel_mu >= 1", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("mu0_E", "F", "n_presel_mu >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("mu0_conept", "F", "", 100, 0., 1000.));
-  branchesToCompare.push_back(new branchEntryType("mu0_jetPtRatio", "F", "n_presel_mu >= 1", 100, -0.01, 3.));
-  branchesToCompare.push_back(new branchEntryType("mu0_leptonMVA", "F", "n_presel_mu >= 1", 100, -1., +1.));
-  branchesToCompare.push_back(new branchEntryType("mu0_jetCSV", "F", "n_presel_mu >= 1", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("mu0_dpt_div_pt", "F", "n_presel_mu >= 1", 100, 0., +0.25));
-  branchesToCompare.push_back(new branchEntryType("mu0_segmentCompatibility", "F", "n_presel_mu >= 1", 100, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu0_phi", "F", "n_presel_mu >= 1", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("mu0_sip3D", "F", "n_presel_mu >= 1", 100, 0., +10.));
-  branchesToCompare.push_back(new branchEntryType("mu0_pt", "F", "n_presel_mu >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("mu0_miniRelIso", "F", "n_presel_mu >= 1", 100, -0.01, 1.));
-  branchesToCompare.push_back(new branchEntryType("mu0_dxy", "F", "n_presel_mu >= 1", 100, -0.1, +0.1));
-  branchesToCompare.push_back(new branchEntryType("mu0_eta", "F", "n_presel_mu >= 1", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("mu0_dz", "F", "n_presel_mu >= 1", 100, -0.2, +0.2));
-  branchesToCompare.push_back(new branchEntryType("mu0_isfakeablesel", "I", "n_presel_mu >= 1", 2, -0.5, +1.5));
-//  branchesToCompare.push_back(new branchEntryType("mu0_iscutsel", "I", "n_presel_mu >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu0_ismvasel", "I", "n_presel_mu >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu1_charge", "I", "n_presel_mu >= 2", 3, -1.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu1_jetNDauChargedMVASel", "F", "n_presel_mu >= 2", 20, -0.5, 19.5));
-  branchesToCompare.push_back(new branchEntryType("mu1_jetPtRel", "F", "n_presel_mu >= 2", 100., -0.01, 10.));
-  branchesToCompare.push_back(new branchEntryType("mu1_miniIsoNeutral", "F", "n_presel_mu >= 2", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("mu1_miniIsoCharged", "F", "n_presel_mu >= 2", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("mu1_E", "F", "n_presel_mu >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("mu1_conept", "F", "", 100, 0., 500.));
-  branchesToCompare.push_back(new branchEntryType("mu1_jetPtRatio", "F", "n_presel_mu >= 2", 100, -0.01, 3.));
-  branchesToCompare.push_back(new branchEntryType("mu1_leptonMVA", "F", "n_presel_mu >= 2", 100, -1., +1.));
-  branchesToCompare.push_back(new branchEntryType("mu1_jetCSV", "F", "n_presel_mu >= 2", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("mu1_dpt_div_pt", "F", "n_presel_mu >= 2", 100, 0., +0.25));
-  branchesToCompare.push_back(new branchEntryType("mu1_segmentCompatibility", "F", "n_presel_mu >= 2", 100, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu1_phi", "F", "n_presel_mu >= 2", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("mu1_sip3D", "F", "n_presel_mu >= 2", 100, 0., +10.));
-  branchesToCompare.push_back(new branchEntryType("mu1_pt", "F", "n_presel_mu >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("mu1_miniRelIso", "F", "n_presel_mu >= 2", 100, -0.01, 1.));
-  branchesToCompare.push_back(new branchEntryType("mu1_dxy", "F", "n_presel_mu >= 2", 100, -0.1, +0.1));
-  branchesToCompare.push_back(new branchEntryType("mu1_eta", "F", "n_presel_mu >= 2", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("mu1_dz", "F", "n_presel_mu >= 2", 100, -0.2, +0.2));
+  branchesToCompare.push_back(new branchEntryType("n_presel_jetFwd", "I", "", 20, -0.5, 19.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_charge", "I", "n_presel_mu >= 1", 3, -1.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_jetNDauChargedMVASel", "F", "n_presel_mu >= 1", 20, -0.5, 19.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_jetPtRel", "F", "n_presel_mu >= 1", 100., -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("mu1_miniIsoNeutral", "F", "n_presel_mu >= 1", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_miniIsoCharged", "F", "n_presel_mu >= 1", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_PFRelIso04", "F", "n_presel_mu >= 1", 100, -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("mu1_E", "F", "n_presel_mu >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("mu1_conept", "F", "", 100, 0., 1000.));
+  branchesToCompare.push_back(new branchEntryType("mu1_jetPtRatio", "F", "n_presel_mu >= 1", 100, -0.01, 3.));
+  branchesToCompare.push_back(new branchEntryType("mu1_leptonMVA", "F", "n_presel_mu >= 1", 100, -1., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu1_jetCSV", "F", "n_presel_mu >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu1_jetDeepCSV", "F", "n_presel_mu >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu1_jetDeepJet", "F", "n_presel_mu >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu1_dpt_div_pt", "F", "n_presel_mu >= 1", 100, 0., +0.25));
+  branchesToCompare.push_back(new branchEntryType("mu1_segmentCompatibility", "F", "n_presel_mu >= 1", 100, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_phi", "F", "n_presel_mu >= 1", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("mu1_sip3D", "F", "n_presel_mu >= 1", 100, 0., +10.));
+  branchesToCompare.push_back(new branchEntryType("mu1_pt", "F", "n_presel_mu >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("mu1_miniRelIso", "F", "n_presel_mu >= 1", 100, -0.01, 1.));
+  branchesToCompare.push_back(new branchEntryType("mu1_dxyAbs", "F", "n_presel_mu >= 1", 100, -0.1, +0.1));
+  branchesToCompare.push_back(new branchEntryType("mu1_eta", "F", "n_presel_mu >= 1", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("mu1_dz", "F", "n_presel_mu >= 1", 100, -0.2, +0.2));
   branchesToCompare.push_back(new branchEntryType("mu1_isfakeablesel", "I", "n_presel_mu >= 1", 2, -0.5, +1.5));
-//  branchesToCompare.push_back(new branchEntryType("mu1_iscutsel", "I", "n_presel_mu >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("mu1_ismvasel", "I", "n_presel_mu >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele0_ntMVAeleID", "F", "n_presel_ele >= 1", 100, -1., +1.));
-  branchesToCompare.push_back(new branchEntryType("ele0_charge", "I", "n_presel_ele >= 1", 3, -1.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele0_jetNDauChargedMVASel", "F", "n_presel_ele >= 1", 20, -0.5, +19.5));
-  branchesToCompare.push_back(new branchEntryType("ele0_jetPtRel", "F", "n_presel_ele >= 1", 100, -0.01, 10.));
-  branchesToCompare.push_back(new branchEntryType("ele0_miniIsoNeutral", "F", "n_presel_ele >= 1", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("ele0_miniIsoCharged", "F", "n_presel_ele >= 1", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("ele0_E", "F", "n_presel_ele >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("ele0_conept", "F", "", 100, 0., 1000.));
-  branchesToCompare.push_back(new branchEntryType("ele0_jetPtRatio", "F", "n_presel_ele >= 1", 100, -0.01, 3.));
-  branchesToCompare.push_back(new branchEntryType("ele0_leptonMVA", "F", "n_presel_ele >= 1", 100, -1., +1.));
-  branchesToCompare.push_back(new branchEntryType("ele0_jetCSV", "F", "n_presel_ele >= 1", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("ele0_phi", "F", "n_presel_ele >= 1", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("ele0_sip3D", "F", "n_presel_ele >= 1", 100, 0., +10.));
-  branchesToCompare.push_back(new branchEntryType("ele0_pt", "F", "n_presel_ele >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("ele0_miniRelIso", "F", "n_presel_ele >= 1", 100, -0.01, 1.));
-  branchesToCompare.push_back(new branchEntryType("ele0_dxy", "F", "n_presel_ele >= 1", 100, -0.1, +0.1));
-  branchesToCompare.push_back(new branchEntryType("ele0_eta", "F", "n_presel_ele >= 1", 100, -3.0, +3.0));
-  branchesToCompare.push_back(new branchEntryType("ele0_dz", "F", "n_presel_ele >= 1", 100, -0.2, +0.2));
-  branchesToCompare.push_back(new branchEntryType("ele0_nMissingHits", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele0_isChargeConsistent", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele0_isfakeablesel", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
-//  branchesToCompare.push_back(new branchEntryType("ele0_iscutsel", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele0_ismvasel", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele1_ntMVAeleID", "F", "n_presel_ele >= 2", 100, -1., +1.));
-  branchesToCompare.push_back(new branchEntryType("ele1_charge", "I", "n_presel_ele >= 2", 3, -1.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele1_jetNDauChargedMVASel", "F", "n_presel_ele >= 2", 20, -0.5, +19.5));
-  branchesToCompare.push_back(new branchEntryType("ele1_jetPtRel", "F", "n_presel_ele >= 2", 100, -0.01, 10.));
-  branchesToCompare.push_back(new branchEntryType("ele1_miniIsoNeutral", "F", "n_presel_ele >= 2", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("ele1_miniIsoCharged", "F", "n_presel_ele >= 2", 100, -0.01, 100.));
-  branchesToCompare.push_back(new branchEntryType("ele1_E", "F", "n_presel_ele >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("ele1_conept", "F", "", 100, 0., 500.));
-  branchesToCompare.push_back(new branchEntryType("ele1_jetPtRatio", "F", "n_presel_ele >= 2", 100, -0.01, 3.));
-  branchesToCompare.push_back(new branchEntryType("ele1_leptonMVA", "F", "n_presel_ele >= 2", 100, -1., +1.));
-  branchesToCompare.push_back(new branchEntryType("ele1_jetCSV", "F", "n_presel_ele >= 2", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("ele1_phi", "F", "n_presel_ele >= 2", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("ele1_sip3D", "F", "n_presel_ele >= 2", 100, 0., +10.));
-  branchesToCompare.push_back(new branchEntryType("ele1_pt", "F", "n_presel_ele >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("ele1_miniRelIso", "F", "n_presel_ele >= 2", 100, -0.01, 1.));
-  branchesToCompare.push_back(new branchEntryType("ele1_dxy", "F", "n_presel_ele >= 2", 100, -0.1, +0.1));
-  branchesToCompare.push_back(new branchEntryType("ele1_eta", "F", "n_presel_ele >= 2", 100, -3.0, +3.0));
-  branchesToCompare.push_back(new branchEntryType("ele1_dz", "F", "n_presel_ele >= 2", 100, -0.2, +0.2));
-  branchesToCompare.push_back(new branchEntryType("ele1_nMissingHits", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele1_isChargeConsistent", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele1_isfakeablesel", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
-//  branchesToCompare.push_back(new branchEntryType("ele1_iscutsel", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("ele1_ismvasel", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstElectronVTightMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstElectronTightMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstElectronMediumMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstElectronLooseMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstElectronVLooseMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstMuonLoose3", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byVTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byMediumIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byLooseCombinedIsolationDeltaBetaCorr3Hits", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_decayModeFindingOldDMs", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_againstMuonTight3", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_decayModeFindingNewDMs", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_charge", "I", "n_presel_tau >= 1", 3, -1.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byTightCombinedIsolationDeltaBetaCorr3Hits", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byMediumCombinedIsolationDeltaBetaCorr3Hits", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byTightCombinedIsolationDeltaBetaCorr3HitsdR03", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byLooseIsolationMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 1", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau0_byCombinedIsolationDeltaBetaCorr3Hits", "F", "n_presel_tau >= 1", 100, -0.01, 5.));
-  branchesToCompare.push_back(new branchEntryType("tau0_dz", "F", "n_presel_tau >= 1", 100, -0.3, +0.3));
-  branchesToCompare.push_back(new branchEntryType("tau0_dxy", "F", "n_presel_tau >= 1", 100, -0.2, +0.2));
-  branchesToCompare.push_back(new branchEntryType("tau0_pt", "F", "n_presel_tau >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("tau0_eta", "F", "n_presel_tau >= 1", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("tau0_phi", "F", "n_presel_tau >= 1", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("tau0_E", "F", "n_presel_tau >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronVTightMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronTightMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronMediumMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronLooseMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronVLooseMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstMuonLoose3", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byVTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byMediumIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byLooseCombinedIsolationDeltaBetaCorr3Hits", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_decayModeFindingOldDMs", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_againstMuonTight3", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byLooseCombinedIsolationDeltaBetaCorr3HitsdR03", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_decayModeFindingNewDMs", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_charge", "I", "n_presel_tau >= 2", 3, -1.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byTightCombinedIsolationDeltaBetaCorr3Hits", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byMediumCombinedIsolationDeltaBetaCorr3Hits", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byMediumCombinedIsolationDeltaBetaCorr3HitsdR03", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byTightCombinedIsolationDeltaBetaCorr3HitsdR03", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byLooseIsolationMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 2", 2, -0.5, +1.5));
-  branchesToCompare.push_back(new branchEntryType("tau1_byCombinedIsolationDeltaBetaCorr3Hits", "F", "n_presel_tau >= 2", 100, -0.01, 5.));
-  branchesToCompare.push_back(new branchEntryType("tau1_dz", "F", "n_presel_tau >= 2", 100, -0.3, +0.3));
-  branchesToCompare.push_back(new branchEntryType("tau1_dxy", "F", "n_presel_tau >= 2", 100, -0.2, +0.2));
-  branchesToCompare.push_back(new branchEntryType("tau1_pt", "F", "n_presel_tau >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("tau1_eta", "F", "n_presel_tau >= 2", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("tau1_phi", "F", "n_presel_tau >= 2", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("tau1_E", "F", "n_presel_tau >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet0_CSV", "F", "n_presel_jet >= 1", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("jet0_pt", "F", "n_presel_jet >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet0_eta", "F", "n_presel_jet >= 1", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("jet0_phi", "F", "n_presel_jet >= 1", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("jet0_E", "F", "n_presel_jet >= 1", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet1_CSV", "F", "n_presel_jet >= 2", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("jet1_pt", "F", "n_presel_jet >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet1_eta", "F", "n_presel_jet >= 2", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("jet1_phi", "F", "n_presel_jet >= 2", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("jet1_E", "F", "n_presel_jet >= 2", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet2_CSV", "F", "n_presel_jet >= 3", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("jet2_pt", "F", "n_presel_jet >= 3", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet2_eta", "F", "n_presel_jet >= 3", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("jet2_phi", "F", "n_presel_jet >= 3", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("jet2_E", "F", "n_presel_jet >= 3", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet3_CSV", "F", "n_presel_jet >= 4", 100, 0., +1.));
-  branchesToCompare.push_back(new branchEntryType("jet3_pt", "F", "n_presel_jet >= 4", 100, 0., 250.));
-  branchesToCompare.push_back(new branchEntryType("jet3_eta", "F", "n_presel_jet >= 4", 100, -3., +3.));
-  branchesToCompare.push_back(new branchEntryType("jet3_phi", "F", "n_presel_jet >= 4", 36, -TMath::Pi(), +TMath::Pi()));
-  branchesToCompare.push_back(new branchEntryType("jet3_E", "F", "n_presel_jet >= 4", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("mu1_ismvasel", "I", "n_presel_mu >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu1_isGenMatched", "I", "n_presel_mu >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_charge", "I", "n_presel_mu >= 2", 3, -1.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_jetNDauChargedMVASel", "F", "n_presel_mu >= 2", 20, -0.5, 19.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_jetPtRel", "F", "n_presel_mu >= 2", 100., -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("mu2_miniIsoNeutral", "F", "n_presel_mu >= 2", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_miniIsoCharged", "F", "n_presel_mu >= 2", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_PFRelIso04", "F", "n_presel_mu >= 2", 100, -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("mu2_E", "F", "n_presel_mu >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("mu2_conept", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mu2_jetPtRatio", "F", "n_presel_mu >= 2", 100, -0.01, 3.));
+  branchesToCompare.push_back(new branchEntryType("mu2_leptonMVA", "F", "n_presel_mu >= 2", 100, -1., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu2_jetCSV", "F", "n_presel_mu >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu2_jetDeepCSV", "F", "n_presel_mu >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu2_jetDeepJet", "F", "n_presel_mu >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("mu2_dpt_div_pt", "F", "n_presel_mu >= 2", 100, 0., +0.25));
+  branchesToCompare.push_back(new branchEntryType("mu2_segmentCompatibility", "F", "n_presel_mu >= 2", 100, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_phi", "F", "n_presel_mu >= 2", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("mu2_sip3D", "F", "n_presel_mu >= 2", 100, 0., +10.));
+  branchesToCompare.push_back(new branchEntryType("mu2_pt", "F", "n_presel_mu >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("mu2_miniRelIso", "F", "n_presel_mu >= 2", 100, -0.01, 1.));
+  branchesToCompare.push_back(new branchEntryType("mu2_dxyAbs", "F", "n_presel_mu >= 2", 100, -0.1, +0.1));
+  branchesToCompare.push_back(new branchEntryType("mu2_eta", "F", "n_presel_mu >= 2", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("mu2_dz", "F", "n_presel_mu >= 2", 100, -0.2, +0.2));
+  branchesToCompare.push_back(new branchEntryType("mu2_isfakeablesel", "I", "n_presel_mu >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_ismvasel", "I", "n_presel_mu >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("mu2_isGenMatched", "I", "n_presel_mu >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_ntMVAeleID", "F", "n_presel_ele >= 1", 100, -1., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele1_charge", "I", "n_presel_ele >= 1", 3, -1.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_jetNDauChargedMVASel", "F", "n_presel_ele >= 1", 20, -0.5, +19.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_jetPtRel", "F", "n_presel_ele >= 1", 100, -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("ele1_miniIsoNeutral", "F", "n_presel_ele >= 1", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_miniIsoCharged", "F", "n_presel_ele >= 1", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_PFRelIso04", "F", "n_presel_ele >= 1", 100, -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("ele1_E", "F", "n_presel_ele >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("ele1_conept", "F", "n_presel_ele >= 1", 100, 0., 1000.));
+  branchesToCompare.push_back(new branchEntryType("ele1_jetPtRatio", "F", "n_presel_ele >= 1", 100, -0.01, 3.));
+  branchesToCompare.push_back(new branchEntryType("ele1_leptonMVA", "F", "n_presel_ele >= 1", 100, -1., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele1_jetCSV", "F", "n_presel_ele >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele1_jetDeepCSV", "F", "n_presel_ele >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele1_jetDeepJet", "F", "n_presel_ele >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele1_phi", "F", "n_presel_ele >= 1", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("ele1_sip3D", "F", "n_presel_ele >= 1", 100, 0., +10.));
+  branchesToCompare.push_back(new branchEntryType("ele1_pt", "F", "n_presel_ele >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("ele1_miniRelIso", "F", "n_presel_ele >= 1", 100, -0.01, 1.));
+  branchesToCompare.push_back(new branchEntryType("ele1_dxyAbs", "F", "n_presel_ele >= 1", 100, -0.1, +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele1_eta", "F", "n_presel_ele >= 1", 100, -3.0, +3.0));
+  branchesToCompare.push_back(new branchEntryType("ele1_dz", "F", "n_presel_ele >= 1", 100, -0.2, +0.2));
+  branchesToCompare.push_back(new branchEntryType("ele1_nMissingHits", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_sigmaEtaEta", "F", "n_presel_ele >= 1", 100, -0., +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele1_HoE", "F", "n_presel_ele >= 1", 100, 0., +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele1_deltaEta", "F", "n_presel_ele >= 1", 100, 0., +0.02));
+  branchesToCompare.push_back(new branchEntryType("ele1_deltaPhi", "F", "n_presel_ele >= 1", 100, 0., +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele1_OoEminusOoP", "F", "n_presel_ele >= 1", 100, 0., +0.02));
+  branchesToCompare.push_back(new branchEntryType("ele1_isChargeConsistent", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_isfakeablesel", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_ismvasel", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele1_isGenMatched", "I", "n_presel_ele >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_ntMVAeleID", "F", "n_presel_ele >= 2", 100, -1., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele2_charge", "I", "n_presel_ele >= 2", 3, -1.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_jetNDauChargedMVASel", "F", "n_presel_ele >= 2", 20, -0.5, +19.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_jetPtRel", "F", "n_presel_ele >= 2", 100, -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("ele2_miniIsoNeutral", "F", "n_presel_ele >= 2", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_miniIsoCharged", "F", "n_presel_ele >= 2", 100, -0.01, 0.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_PFRelIso04", "F", "n_presel_ele >= 2", 100, -0.01, 10.));
+  branchesToCompare.push_back(new branchEntryType("ele2_E", "F", "n_presel_ele >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("ele2_conept", "F", "n_presel_ele >= 2", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("ele2_jetPtRatio", "F", "n_presel_ele >= 2", 100, -0.01, 3.));
+  branchesToCompare.push_back(new branchEntryType("ele2_leptonMVA", "F", "n_presel_ele >= 2", 100, -1., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele2_jetCSV", "F", "n_presel_ele >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele2_jetDeepCSV", "F", "n_presel_ele >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele2_jetDeepJet", "F", "n_presel_ele >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("ele2_phi", "F", "n_presel_ele >= 2", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("ele2_sip3D", "F", "n_presel_ele >= 2", 100, 0., +10.));
+  branchesToCompare.push_back(new branchEntryType("ele2_pt", "F", "n_presel_ele >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("ele2_miniRelIso", "F", "n_presel_ele >= 2", 100, -0.01, 1.));
+  branchesToCompare.push_back(new branchEntryType("ele2_dxyAbs", "F", "n_presel_ele >= 2", 100, -0.1, +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele2_eta", "F", "n_presel_ele >= 2", 100, -3.0, +3.0));
+  branchesToCompare.push_back(new branchEntryType("ele2_dz", "F", "n_presel_ele >= 2", 100, -0.2, +0.2));
+  branchesToCompare.push_back(new branchEntryType("ele2_nMissingHits", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_sigmaEtaEta", "F", "n_presel_ele >= 2", 100, -0., +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele2_HoE", "F", "n_presel_ele >= 2", 100, 0., +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele2_deltaEta", "F", "n_presel_ele >= 2", 100, 0., +0.02));
+  branchesToCompare.push_back(new branchEntryType("ele2_deltaPhi", "F", "n_presel_ele >= 2", 100, 0., +0.1));
+  branchesToCompare.push_back(new branchEntryType("ele2_OoEminusOoP", "F", "n_presel_ele >= 2", 100, 0., +0.02));
+  branchesToCompare.push_back(new branchEntryType("ele2_isChargeConsistent", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_isfakeablesel", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_ismvasel", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("ele2_isGenMatched", "I", "n_presel_ele >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronVTightMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronTightMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronMediumMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronLooseMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstElectronVLooseMVA6", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstMuonLoose3", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_byVTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_byTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_byMediumIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_decayModeFindingOldDMs", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_againstMuonTight3", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_decayModeFindingNewDMs", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_charge", "I", "n_presel_tau >= 1", 3, -1.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_byLooseIsolationMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_byVLooseIsolationMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau1_rawMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 1", 100, -0.5, +1.1));
+  branchesToCompare.push_back(new branchEntryType("tau1_dz", "F", "n_presel_tau >= 1", 100, -0.3, +0.3));
+  branchesToCompare.push_back(new branchEntryType("tau1_dxy", "F", "n_presel_tau >= 1", 100, -0.2, +0.2));
+  branchesToCompare.push_back(new branchEntryType("tau1_pt", "F", "n_presel_tau >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("tau1_eta", "F", "n_presel_tau >= 1", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("tau1_phi", "F", "n_presel_tau >= 1", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("tau1_E", "F", "n_presel_tau >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("tau1_isGenMatched", "I", "n_presel_tau >= 1", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstElectronVTightMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstElectronTightMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstElectronMediumMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstElectronLooseMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstElectronVLooseMVA6", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstMuonLoose3", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_byVTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_byTightIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_byMediumIsolationMVArun2v1DBdR03oldDMwLT", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_decayModeFindingOldDMs", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_againstMuonTight3", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_decayModeFindingNewDMs", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_charge", "I", "n_presel_tau >= 2", 3, -1.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_byLooseIsolationMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_byVLooseIsolationMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("tau2_rawMVArun2v1DBdR03oldDMwLT", "F", "n_presel_tau >= 2", 100, -0.5, +1.1));
+  branchesToCompare.push_back(new branchEntryType("tau2_dz", "F", "n_presel_tau >= 2", 100, -0.3, +0.3));
+  branchesToCompare.push_back(new branchEntryType("tau2_dxy", "F", "n_presel_tau >= 2", 100, -0.2, +0.2));
+  branchesToCompare.push_back(new branchEntryType("tau2_pt", "F", "n_presel_tau >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("tau2_eta", "F", "n_presel_tau >= 2", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("tau2_phi", "F", "n_presel_tau >= 2", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("tau2_E", "F", "n_presel_tau >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("tau2_isGenMatched", "I", "n_presel_tau >= 2", 2, -0.5, +1.5));
+  branchesToCompare.push_back(new branchEntryType("jet1_CSV", "F", "n_presel_jet >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet1_DeepCSV", "F", "n_presel_jet >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet1_DeepJet", "F", "n_presel_jet >= 1", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet1_pt", "F", "n_presel_jet >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet1_eta", "F", "n_presel_jet >= 1", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("jet1_phi", "F", "n_presel_jet >= 1", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jet1_E", "F", "n_presel_jet >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet1_QGdiscr", "F", "n_presel_jet >= 1", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("jet2_CSV", "F", "n_presel_jet >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet2_DeepCSV", "F", "n_presel_jet >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet2_DeepJet", "F", "n_presel_jet >= 2", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet2_pt", "F", "n_presel_jet >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet2_eta", "F", "n_presel_jet >= 2", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("jet2_phi", "F", "n_presel_jet >= 2", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jet2_E", "F", "n_presel_jet >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet2_QGdiscr", "F", "n_presel_jet >= 1", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("jet3_CSV", "F", "n_presel_jet >= 3", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet3_DeepCSV", "F", "n_presel_jet >= 3", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet3_DeepJet", "F", "n_presel_jet >= 3", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet3_pt", "F", "n_presel_jet >= 3", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet3_eta", "F", "n_presel_jet >= 3", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("jet3_phi", "F", "n_presel_jet >= 3", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jet3_E", "F", "n_presel_jet >= 3", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet3_QGdiscr", "F", "n_presel_jet >= 1", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("jet4_CSV", "F", "n_presel_jet >= 4", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet4_DeepCSV", "F", "n_presel_jet >= 4", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet4_DeepJet", "F", "n_presel_jet >= 4", 100, 0., +1.));
+  branchesToCompare.push_back(new branchEntryType("jet4_pt", "F", "n_presel_jet >= 4", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet4_eta", "F", "n_presel_jet >= 4", 100, -3., +3.));
+  branchesToCompare.push_back(new branchEntryType("jet4_phi", "F", "n_presel_jet >= 4", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jet4_E", "F", "n_presel_jet >= 4", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jet4_QGdiscr", "F", "n_presel_jet >= 1", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd1_pt", "F", "n_presel_jetFwd >= 1", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd1_eta", "F", "n_presel_jetFwd >= 1", 100, -5.1, +5.1));
+  branchesToCompare.push_back(new branchEntryType("jetFwd1_phi", "F", "n_presel_jetFwd >= 1", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jetFwd1_E", "F", "n_presel_jetFwd >= 1", 100, 0., 600.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd2_pt", "F", "n_presel_jetFwd >= 2", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd2_eta", "F", "n_presel_jetFwd >= 2", 100, -5.1, +5.1));
+  branchesToCompare.push_back(new branchEntryType("jetFwd2_phi", "F", "n_presel_jetFwd >= 2", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jetFwd2_E", "F", "n_presel_jetFwd >= 2", 100, 0., 600.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd3_pt", "F", "n_presel_jetFwd >= 3", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd3_eta", "F", "n_presel_jetFwd >= 3", 100, -5.1, +5.1));
+  branchesToCompare.push_back(new branchEntryType("jetFwd3_phi", "F", "n_presel_jetFwd >= 3", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jetFwd3_E", "F", "n_presel_jetFwd >= 3", 100, 0., 600.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd4_pt", "F", "n_presel_jetFwd >= 4", 100, 0., 250.));
+  branchesToCompare.push_back(new branchEntryType("jetFwd4_eta", "F", "n_presel_jetFwd >= 4", 100, -5.1, +5.1));
+  branchesToCompare.push_back(new branchEntryType("jetFwd4_phi", "F", "n_presel_jetFwd >= 4", 36, -TMath::Pi(), +TMath::Pi()));
+  branchesToCompare.push_back(new branchEntryType("jetFwd4_E", "F", "n_presel_jetFwd >= 4", 100, 0., 600.));
   branchesToCompare.push_back(new branchEntryType("PFMET", "F", "", 100, 0., 250.));
   branchesToCompare.push_back(new branchEntryType("PFMETphi", "F", "", 36, -TMath::Pi(), +TMath::Pi()));
   branchesToCompare.push_back(new branchEntryType("MHT", "F", "", 100, 0., 600.));
   branchesToCompare.push_back(new branchEntryType("metLD", "F", "", 100, 0., 2.));
-  branchesToCompare.push_back(new branchEntryType("lep0_conept", "F", "", 100, 0., 1000.));
-  branchesToCompare.push_back(new branchEntryType("lep1_conept", "F", "", 100, 0., 500.));
-  branchesToCompare.push_back(new branchEntryType("mindr_lep0_jet", "F", "", 100, 0., 5.));
+  branchesToCompare.push_back(new branchEntryType("lep1_conePt", "F", "", 100, 0., 1000.));
+  branchesToCompare.push_back(new branchEntryType("lep2_conePt", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("lep3_conePt", "F", "", 100, 0., 500.));
   branchesToCompare.push_back(new branchEntryType("mindr_lep1_jet", "F", "", 100, 0., 5.));
-//  branchesToCompare.push_back(new branchEntryType("n_jet25_recl", "F", "", 100, 0., 50.));
-  branchesToCompare.push_back(new branchEntryType("MT_met_lep0", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mindr_lep2_jet", "F", "", 100, 0., 5.));
+  branchesToCompare.push_back(new branchEntryType("mindr_lep3_jet", "F", "", 100, 0., 5.));
+  branchesToCompare.push_back(new branchEntryType("mindr_lep4_jet", "F", "", 100, 0., 5.));
+  branchesToCompare.push_back(new branchEntryType("mindr_tau1_jet", "F", "", 100, 0., 5.));
+  branchesToCompare.push_back(new branchEntryType("mindr_tau2_jet", "F", "", 100, 0., 5.));
   branchesToCompare.push_back(new branchEntryType("avg_dr_jet", "F", "", 100, 0., 6.));
-  branchesToCompare.push_back(new branchEntryType("MVA_2lss_ttV", "F", "(n_fakeablesel_mu + n_fakeablesel_ele) >= 2", 100, -1., 1.));
-  branchesToCompare.push_back(new branchEntryType("MVA_2lss_ttbar", "F", "(n_fakeablesel_mu + n_fakeablesel_ele) >= 2", 100, -1., 1.));
+  branchesToCompare.push_back(new branchEntryType("avr_dr_lep_tau", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("max_dr_jet", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("max_dr_lep_tau", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("mindr_tau_jet", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("min_dr_lep_tau", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("min_dr_lep_jet", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_leps", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_taus", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_lep_tau_ss", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_lep1_tau", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_lep2_tau", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_lep3_tau", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_lep1_tau2", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("dr_lep2_tau2", "F", "", 100, 0., 6.));
+  branchesToCompare.push_back(new branchEntryType("max_lep_eta", "F", "", 100, -3., 3.));
+  branchesToCompare.push_back(new branchEntryType("mT_lep1", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mT_lep2", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mT_lep3", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mT_lep4", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mTauTauVis", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mTauTauVis1", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mTauTauVis2", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mbb", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("mbb_loose", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("cosThetaS_hadTau", "F", "", 100, -1., 1.));
+  branchesToCompare.push_back(new branchEntryType("HTT", "F", "", 100, -1., 1.));
+  branchesToCompare.push_back(new branchEntryType("HadTop_pt", "F", "", 100, 0., 500.));
+  branchesToCompare.push_back(new branchEntryType("Hj_tagger", "F", "", 100, -1., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_plainKin_ttV", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_plainKin_ttbar", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_1l_2tau_HTT_SUM_VT", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2l_2tau_plainKin_1B_VT", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2l_2tau_plainKin_SUM_VT", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_ttV", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_ttbar", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_1tau_plainKin_ttbar", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_1tau_plainKin_ttV", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_1tau_plainKin_1B_M", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_1tau_plainKin_SUM_M", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_1tau_HTT_SUM_M", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_2lss_1tau_HTTMEM_SUM_M", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_3l_ttV", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_3l_ttbar", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_3l_1tau_plainKin_SUM_M", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("mvaOutput_3l_1tau_plainKin_1B_M", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("FR_weight", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("triggerSF_weight", "F", "", 100, 0., 2.));
+  branchesToCompare.push_back(new branchEntryType("leptonSF_weight", "F", "", 100, 0., 2.));
+  branchesToCompare.push_back(new branchEntryType("tauSF_weight", "F", "", 100, 0., 2.));
+  branchesToCompare.push_back(new branchEntryType("bTagSF_weight", "F", "", 100, 0., 2.));
+  branchesToCompare.push_back(new branchEntryType("PU_weight", "F", "", 100, 0., 2.));
+  branchesToCompare.push_back(new branchEntryType("MC_weight", "F", "", 3, -1.5, 1.5));
+  branchesToCompare.push_back(new branchEntryType("memOutput_LR", "F", "", 100, 0., 1.));
+  branchesToCompare.push_back(new branchEntryType("nBJetMedium", "I", "", 12, 0, 12));
+  branchesToCompare.push_back(new branchEntryType("nBJetLoose", "I", "", 12, 0, 12));
+  branchesToCompare.push_back(new branchEntryType("nLightJet", "I", "", 12, 0, 12));
 
   for ( std::vector<branchEntryType*>::const_iterator branch = branchesToCompare.begin();
         branch != branchesToCompare.end(); ++branch ) {
     std::cout << "plotting " << (*branch)->branchName_ << "..." << std::endl;
 
     branchEntryType* branch_ref = (*branch)->Clone("ref");
-    if(branch_ref->fillHistogram(tree_ref, ref.selection) < 0)
+    if(branch_ref->fillHistogram(tree_ref, ref_selection) < 0)
       branch_ref->histogram_ = nullptr;
     else
       normalizeHistogram(branch_ref->histogram_);
-    
+
     branchEntryType* branch_test = (*branch)->Clone("test");
-    if(branch_test->fillHistogram(tree_test, test.selection) < 0)
+    if(branch_test->fillHistogram(tree_test, test_selection) < 0)
       branch_test->histogram_ = nullptr;
     else
       normalizeHistogram(branch_test->histogram_);
 
     std::string outputFileName = Form("compareSyncNtuples_%s.png", (*branch)->branchName_.data());
-    showHistograms(800, 900, 
-                   branch_ref->histogram_, ref.legendEntry,
-                   branch_test->histogram_, test.legendEntry,
+    showHistograms(800, 900,
+                   branch_ref->histogram_, ref_name,
+                   branch_test->histogram_, test_name,
                    NULL, "",
                    NULL, "",
                    NULL, "",
@@ -742,7 +853,7 @@ void compareSyncNtuples(const std::string & ref_str,
     delete branch_ref;
     delete branch_test;
   }
-  
+
   for ( std::vector<branchEntryType*>::const_iterator it = branchesToCompare.end();
         it != branchesToCompare.end(); ++it ) {
     delete (*it);
@@ -754,10 +865,34 @@ void compareSyncNtuples(const std::string & ref_str,
 
 void compareSyncNtuples()
 {
-  const std::string test_str = "tallinn";
-  const std::string sample_str = "tth";
-  for(const auto & kv: ntupleMetadataMap.at(sample_str))
-    if(test_str != kv.first)
-      compareSyncNtuples(kv.first, test_str, sample_str);
-}
+  for(std::size_t i = 0; i < ntupleMetadataMap.size(); ++i)
+  {
+    for(std::size_t j = i + 1; j < ntupleMetadataMap.size(); ++j)
+    {
+      const NtupleMetaData & ref = ntupleMetadataMap[i];
+      const NtupleMetaData & test = ntupleMetadataMap[j];
+      assert(ref.inputFileNames.size() == test.inputFileNames.size());
 
+      for(std::size_t k = 0; k < ref.inputFileNames.size(); ++k)
+      {
+        const std::string ref_inputFileName = ref.inputFileNames[k];
+        const std::string test_inputFileName = test.inputFileNames[k];
+
+        for(const std::string & treeName: ref.treeNames.at(ref_inputFileName))
+        {
+          const std::vector<std::string> & test_treeNames = test.treeNames.at(test_inputFileName);
+          if(std::find(test_treeNames.cbegin(), test_treeNames.cend(), treeName) == test_treeNames.cend())
+          {
+            continue;
+          }
+          compareSyncNtuples(
+            ref.legendEntry, test.legendEntry,
+            ref_inputFileName, test_inputFileName,
+            ref.selection, test.selection,
+            treeName
+          );
+        }
+      }
+    }
+  }
+}

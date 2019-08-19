@@ -1,8 +1,21 @@
 #!/usr/bin/env python
 
-import argparse, sys, logging, os, subprocess, ROOT, re, shutil, array, time, getpass
-from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_2016 import samples_2016 as samples
+from tthAnalysis.HiggsToTauTau.samples.tthAnalyzeSamples_2017 import samples_2017 as samples
+from tthAnalysis.HiggsToTauTau.safe_root import ROOT
+from tthAnalysis.HiggsToTauTau.common import logging, SmartFormatter
+from tthAnalysis.HiggsToTauTau.hdfs import hdfs
+
 from dump_rle_parallel import dump_rle_parallel
+
+import argparse
+import sys
+import os
+import subprocess
+import re
+import shutil
+import array
+import time
+import getpass
 
 '''The script copies a subset of an Ntuple, given RLE numbers, sample name and output file name
 
@@ -105,8 +118,8 @@ def get_rle(in_filename, tree_name = "tree"):
   evt  = array.array('L', [0])
 
   t_in.SetBranchAddress("run", run)
-  t_in.SetBranchAddress("lumi", lumi)
-  t_in.SetBranchAddress("evt", evt)
+  t_in.SetBranchAddress("luminosityBlock", lumi)
+  t_in.SetBranchAddress("event", evt)
 
   nof_entries = t_in.GetEntries()
   for i in range(nof_entries):
@@ -129,7 +142,7 @@ def skim_debug(out_filename, rle_list, tree_name = "tree"):
   logging.debug("Checking if {out_filename} contains exactly the same events as provided by the RLE file".format(
     out_filename = out_filename,
   ))
-  if not os.path.isfile(out_filename):
+  if not hdfs.isfile(out_filename):
     return False
 
   out_rle_list = get_rle(out_filename, tree_name)
@@ -174,18 +187,6 @@ def positive_int(i):
   return i_int
 
 if __name__ == '__main__':
-  logging.basicConfig(
-    stream = sys.stdout,
-    level  = logging.INFO,
-    format = '%(asctime)s - %(funcName)s():%(lineno)s - %(levelname)s: %(message)s'
-  )
-
-  class SmartFormatter(argparse.HelpFormatter):
-    def _split_lines(self, text, width):
-      if text.startswith('R|'):
-        return text[2:].splitlines()
-      return argparse.HelpFormatter._split_lines(self, text, width)
-
   parser = argparse.ArgumentParser(formatter_class = lambda prog: SmartFormatter(prog, max_help_position = 45))
   group = parser.add_mutually_exclusive_group()
   parser.add_argument('-i', '--input', metavar = 'file', required = True, type = str, default = '',
@@ -220,13 +221,13 @@ if __name__ == '__main__':
   nof_files    = args.nof_files
 
   # check if input RLE file exists
-  if not os.path.isfile(rle_filename):
+  if not hdfs.isfile(rle_filename):
     logging.error("File {rle_filename} does not exist or is not a file!".format(rle_filename = rle_filename))
     sys.exit(1)
 
   # check if the directory into which we have to write the output ROOT file already exists
   out_parent_dir = os.path.dirname(out_filename)
-  if not os.path.isdir(out_parent_dir):
+  if not hdfs.isdir(out_parent_dir):
     if not force:
       logging.error("Parent directory of the output file {out_filename} does not exist".format(
         out_filename = out_filename),
@@ -237,17 +238,17 @@ if __name__ == '__main__':
         out_parent_dir = out_parent_dir,
       ))
       try:
-        os.makedirs(out_parent_dir)
+        hdfs.mkdirs(out_parent_dir)
       except IOError as err:
         logging.error("Could not create directory {out_parent_dir}".format(out_parent_dir = out_parent_dir))
         sys.exit(1)
 
   # check if output ROOT file exists (if it does then the user is obliged to use '-f' flag!)
-  if os.path.exists(out_filename) and not force:
+  if hdfs.exists(out_filename) and not force:
     logging.error("File {out_filename} already exists!".format(out_filename = out_filename))
     sys.exit(1)
 
-  if grep_dir and not os.path.isdir(grep_dir):
+  if grep_dir and not hdfs.isdir(grep_dir):
     logging.error("Directory {grep_dir} does not exist!".format(grep_dir = grep_dir))
     sys.exit(1)
 
@@ -311,16 +312,16 @@ if __name__ == '__main__':
 
     # remove the tmp directory created by dump_rle_parallel()
     grep_tmp_dir = os.path.join(grep_dir, 'tmp')
-    if os.path.isdir(grep_tmp_dir):
+    if hdfs.isdir(grep_tmp_dir):
       shutil.rmtree(grep_tmp_dir)
 
   logging.debug("Attempting to grep RLE numbers individually")
 
   tmp_dir = os.path.join(out_parent_dir, ".tmp_skim")
-  if not os.path.isdir(tmp_dir):
+  if not hdfs.isdir(tmp_dir):
     logging.debug("Creating temporary directory {tmp_dir}".format(tmp_dir = tmp_dir))
     try:
-      os.makedirs(tmp_dir)
+      hdfs.mkdirs(tmp_dir)
     except IOError as err:
       logging.debug("Could not create directory {tmp_dir}: {reason}".format(
         tmp_dir = tmp_dir,
@@ -397,7 +398,7 @@ if __name__ == '__main__':
     file_meta = file_map[k]
     if not skim(file_meta['in_filename'], file_meta['out_filename'], file_meta['entry_list']):
       cleanup(tmp_dir, True)
-    if not os.path.isfile(file_meta['out_filename']):
+    if not hdfs.isfile(file_meta['out_filename']):
       logging.error("For some reason file {out_filename} does not exist!".format(
         out_filename = file_meta['out_filename']),
       )
@@ -418,8 +419,8 @@ if __name__ == '__main__':
   hadd_stdout, hadd_stderr = hadd_cmd.communicate()
   if hadd_stderr:
     logging.error("Encountered an error while performing hadd: {reason}".format(reason = hadd_stderr))
-    if os.path.isfile(out_filename):
-      os.remove(out_filename)
+    if hdfs.isfile(out_filename):
+      hdfs.remove(out_filename)
   cleanup(tmp_dir)
 
   # check if we didn't miss any RLE numbers in the new, skimmed ROOT file

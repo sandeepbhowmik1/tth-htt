@@ -226,11 +226,20 @@ Disclaimer: the program is tested with only ttHJetToNonbb_M125, TTZToLLNuNu_M-10
 
 ################################################### IMPORTS ###################################################
 
-import argparse, logging, sys, subprocess, os, re, jinja2, codecs, copy, itertools
+from tthAnalysis.HiggsToTauTau.common import logging, SmartFormatter
+import argparse
+import sys
+import subprocess
+import os
+import re
+import jinja2
+import codecs
+import copy
+import itertools
 
 try:
   __import__('imp').find_module('tthAnalysis')
-  from tthAnalysis.HiggsToTauTau.tthAnalyzeSamples_2016 import samples_2016
+  from tthAnalysis.HiggsToTauTau.samples.tthAnalyzeSamples_2017 import samples_2017
 except ImportError:
   sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'python'))
   from tthAnalyzeSamples_2016 import samples_2016
@@ -1394,19 +1403,6 @@ def print_aggregate(agg, hypothesis, output_filename, nof_events_total, secondar
 ################################################# MAIN PROGRAM ################################################
 
 if __name__ == '__main__':
-  logging.basicConfig(
-    stream = sys.stdout,
-    level  = logging.INFO,
-    format = '%(asctime)s - %(levelname)s: %(message)s'
-  )
-
-  # set the help description width to 45 characters
-  class SmartFormatter(argparse.HelpFormatter):
-    def _split_lines(self, text, width):
-      if text.startswith('R|'):
-        return text[2:].splitlines()
-      return argparse.HelpFormatter._split_lines(self, text, width)
-
   parser = argparse.ArgumentParser(formatter_class = lambda prog: SmartFormatter(prog, max_help_position = 45))
   parser.add_argument('-o', '--output', metavar = 'file', required = False, type = str, default = '',
                       help = 'R|Output file')
@@ -1454,7 +1450,7 @@ if __name__ == '__main__':
     if not os.path.isdir(os.path.dirname(args.output)):
       if args.force:
         try:
-          os.makedirs(os.path.dirname(args.output))
+          os.path.mkdirs(os.path.dirname(args.output))
         except IOError:
           logging.error("Could not create directory {dir_name}".format(dir_name=os.path.dirname(args.output)))
           sys.exit(1)
@@ -1566,7 +1562,7 @@ if __name__ == '__main__':
     if not os.path.isdir(os.path.dirname(args.output)):
       if args.force:
         try:
-          os.makedirs(os.path.dirname(args.output))
+          os.path.mkdirs(os.path.dirname(args.output))
         except IOError:
           logging.error("Could not create directory {dir_name}".format(dir_name = os.path.dirname(args.output)))
           sys.exit(1)
@@ -1652,7 +1648,7 @@ if __name__ == '__main__':
           sys.exit(1)
         else:
           try:
-            os.makedirs(args.secondary_output)
+            os.path.mkdirs(args.secondary_output)
           except IOError as err:
             logging.error("Could not create directory {output_dir} for the following reasons: {reasons}".format(
               output_dir = args.secondary_output,

@@ -1,15 +1,35 @@
 #include "tthAnalysis/HiggsToTauTau/interface/RecoHadTauCollectionSelectorTight.h" // RecoHadTauSelectorTight
 
-#include <cmath> // fabs
+#include "tthAnalysis/HiggsToTauTau/interface/cmsException.h" // cmsException()
+#include "tthAnalysis/HiggsToTauTau/interface/analysisAuxFunctions.h" // kEra_*
 
-RecoHadTauSelectorTight::RecoHadTauSelectorTight(int era, int index, bool debug, bool set_selection_flags)
+RecoHadTauSelectorTight::RecoHadTauSelectorTight(int era,
+                                                 int index,
+                                                 bool debug,
+                                                 bool set_selection_flags)
   : RecoHadTauSelectorBase(era, index, debug, set_selection_flags)
 { 
-  min_pt_ = 20.;
-  max_absEta_ = 2.3;
-  max_dz_ = 0.2;
-  min_decayModeFinding_ = 1;
-  set("dR03mvaTight"); 
-  min_antiElectron_ = -1000;
-  min_antiMuon_ = -1000;
+  switch(era)
+  {
+    case kEra_2016:
+    case kEra_2018:
+    case kEra_2017: set("dR03mvaLoose"); break;
+    default: throw cmsException(this) << "Invalid era = " << era;
+  }
+}
+
+void
+RecoHadTauSelectorTight::set_selection_flags(const RecoHadTau & hadTau) const
+{
+  hadTau.set_isTight();
+}
+
+bool
+RecoHadTauSelectorTight::operator()(const RecoHadTau & hadTau) const
+{
+  if(debug_)
+  {
+    std::cout << get_human_line(this, __func__) << ":\n hadTau: " << hadTau << '\n';
+  }
+  return RecoHadTauSelectorBase::operator()(hadTau);
 }
